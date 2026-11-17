@@ -18,13 +18,16 @@ class NeedDecision {
   constructor(item, tile) { this.item = item; this.tile = tile; this.key = item.id + '@' + tile.i; }
 }
 
-// Para cada (bloco, saída): categorias que conseguem chegar a um recipiente da mesma cor.
+// Para cada (bloco, saída): quais categorias, saindo por ali, conseguem chegar a um
+// recipiente que as aceite. Considera pintores (a cor muda no caminho), curinga e descarte.
+const ALL_CATS = Object.keys(FF.CATS);
 function computeReach(F) {
   const reach = new Map();
   const key = (t, e) => t.i * 4 + e;
   F.tiles.forEach(t => { if (t) t.exits.forEach(e => reach.set(key(t, e), new Set())); });
+  const get = (t, e) => reach.get(key(t, e)) || new Set();
   let changed = true, guard = 0;
-  while (changed && guard++ < 200) {
+  while (changed && guard++ < 400) {
     changed = false;
     F.tiles.forEach(t => {
       if (!t) return;
@@ -33,19 +36,27 @@ function computeReach(F) {
         const before = set.size;
         const N = F.nb(t, e), ent = FF.opp(e);
         if (!N || !N.accepts[ent]) return;
-        if (N.type === 'bin') set.add(N.cat);
-        else {
-          let nextExits = [];
-          if (N.type === 'conveyor' || N.type === 'gate') nextExits = [N.out];
-          else if (N.type === 'crossing') nextExits = [e];
-          else if (N.type === 'diverter' || N.type === 'distributor') nextExits = N.outs;
-          nextExits.forEach(ne => { const s2 = reach.get(key(N, ne)); if (s2) s2.forEach(c => set.add(c)); });
+        for (const c of ALL_CATS) {
+          if (set.has(c)) continue;
+          let ok = false;
+          switch (N.type) {
+            case 'bin': ok = FF.binAccepts(N.cat, c); break;
+            case 'paint': ok = get(N, N.out).has(c === 'X' ? 'X' : N.color); break;
+            case 'conveyor': case 'gate': ok = get(N, N.out).has(c); break;
+            case 'crossing': case 'bridge': ok = get(N, e).has(c); break;
+            case 'filter':
+              ok = get(N, N.outs[1]).has(c) || (N.colors.indexOf(c) >= 0 && get(N, N.outs[0]).has(c));
+              break;
+            case 'rev': ok = N.dirs.some(d => d !== ent && get(N, d).has(c)); break;
+            case 'diverter': case 'distributor': ok = N.outs.some(o => get(N, o).has(c)); break;
+          }
+          if (ok) set.add(c);
         }
         if (set.size !== before) changed = true;
       });
     });
   }
-  return { get: (t, e) => reach.get(key(t, e)) || new Set() };
+  return { get };
 }
 
 function decisionPossible(sim) {
@@ -64,6 +75,7 @@ function decisionPossible(sim) {
     if (X.p + T.speed < C.HALF) continue;
     const N = F.nb(T, X.outs);
     if (FF.Routing.isSwitch(N)) return true;
+    if (N && N.type === 'rev' && !(T.type === 'rev' && T.dev === N.dev)) return true;
   }
   return false;
 }
@@ -81,9 +93,15 @@ function scheduleTaps(sv, d, k, now, releaseTick) {
 }
 
 function applyChoice(s, X, N, st) {
-  const d = N.dev, sv = s.solve, n = N.outs.length;
+  const d = N.dev, sv = s.solve, n = FF.Routing.nStates(N);
   if (s.dev[d] === -1) {
     sv.init[d] = st; // definido no planejamento, sem custo
+  } else if (N.type === 'rev' && s.dev[d] !== st) {
+    // inverter: só com o trecho vazio no começo do tick, e o toque é agora
+    if (s.solveOcc[d] > 0 || sv.lastTap + C.MIN_TAP_GAP > s.tick) sv.infeasible = true;
+    sv.taps++;
+    sv.lastTap = s.tick;
+    sv.schedule.push({ tick: s.tick, dev: d });
   } else if (s.dev[d] !== st) {
     const window = s.tick - sv.lastLock[d];
     if (window < C.MIN_TAP_WINDOW) sv.infeasible = true;
@@ -114,7 +132,8 @@ function applyGate(s, X, T, hold) {
 function solve(level, opts = {}) {
   const maxWork = opts.maxWork || 4e6;     // ticks simulados no total
   const maxTicks = opts.maxTicks || 60 * 240;
-  const root = FF.Sim.create(level);
+  const placements = opts.placements || {};
+  const root = FF.Sim.create(level, placements);
   const F = root.F;
   const reach = computeReach(F);
   root.dev = root.dev.map((v, i) => F.devices[i].type === 'gate' ? 0 : -1);
@@ -143,7 +162,7 @@ function solve(level, opts = {}) {
     const r = {
       taps: sim.solve.taps, ticks: sim.tick, peak: sim.peakPressure,
       clean: sim.peakPressure < C.HOPPER_WARN, init: sim.solve.init.slice(),
-      schedule: sim.solve.schedule.slice(), minWindow: sim.solve.minWindow
+      schedule: sim.solve.schedule.slice(), minWindow: sim.solve.minWindow, placements
     };
     const better = (a, b) => !b || a.taps < b.taps || (a.taps === b.taps && a.ticks < b.ticks);
     if (better(r, best)) best = r;
@@ -158,6 +177,8 @@ function solve(level, opts = {}) {
       if (sim.solve.infeasible) { failures.reaction = (failures.reaction || 0) + 1; return; }
       if (sim.tick > maxTicks) { failures.timeout = (failures.timeout || 0) + 1; return; }
       if (bestClean && sim.solve.taps > bestClean.taps) return; // poda
+      // ocupação dos trechos reversíveis no começo do tick (regra: só inverte vazio)
+      sim.solveOcc = F.devices.map((dv, i) => dv.type === 'rev' ? FF.Sim.revLoad(sim, i) : 0);
       const snap = decisionPossible(sim) ? cloneS(sim) : null;
       let req = null;
       sim.decide = (s, X, N) => {
@@ -181,11 +202,23 @@ function solve(level, opts = {}) {
         if (req.gate) {
           options = (snap.solve.holds || 0) < (opts.maxHolds !== undefined ? opts.maxHolds : 12) ? [false, true] : [false];
         } else {
-          options = N.outs.map((_, i) => i).filter(i => reach.get(N, N.outs[i]).has(req.item.cat));
-          if (cur >= 0) {
-            const n = N.outs.length;
-            options.sort((a, b) => ((a - cur + n) % n) - ((b - cur + n) % n));
+          const n = FF.Routing.nStates(N), cat = req.item.cat;
+          const cost = st => cur >= 0 ? (st - cur + n) % n : 0;
+          if (N.type === 'filter') {
+            // estados diferentes podem dar a mesma saída: fica o mais barato de cada saída
+            const best = new Map();
+            for (let st = 0; st < n; st++) {
+              const ex = FF.Routing.filterExit(N, st, cat);
+              if (!reach.get(N, ex).has(cat)) continue;
+              if (!best.has(ex) || cost(st) < cost(best.get(ex))) best.set(ex, st);
+            }
+            options = [...best.values()];
+          } else if (N.type === 'rev') {
+            options = [0, 1].filter(i => N.dirs[i] !== req.item.ins && reach.get(N, N.dirs[i]).has(cat));
+          } else {
+            options = N.outs.map((_, i) => i).filter(i => reach.get(N, N.outs[i]).has(cat));
           }
+          options.sort((a, b) => cost(a) - cost(b));
         }
         if (!options.length) { failures.unreachable = (failures.unreachable || 0) + 1; return; }
         for (const o of options) {
@@ -204,7 +237,7 @@ function solve(level, opts = {}) {
 
 // Reproduz uma solução usando APENAS a API pública do jogo (toques reais).
 function replay(level, sol, onTick) {
-  const sim = FF.Sim.create(level);
+  const sim = FF.Sim.create(level, sol.placements || {});
   sol.init.forEach((st, d) => {
     if (sim.F.devices[d].type === 'gate') { if (sim.dev[d] > 0) FF.Sim.toggle(sim, d); return; }
     while (sim.dev[d] !== st) FF.Sim.toggle(sim, d);

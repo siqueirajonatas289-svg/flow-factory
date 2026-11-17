@@ -9,21 +9,24 @@
   var C = FF.CONFIG, opp = FF.opp, SINK = FF.SINK, HALF = C.HALF;
   var CV = FF.Conveyor;
 
-  function create(level) {
-    var F = FF.buildFactory(level);
+  function create(level, placements) {
+    var F = FF.buildFactory(level, placements);
     if (F.errors.length) throw new Error('Fase ' + level.id + ': ' + F.errors.join('; '));
-    var total = 0;
-    F.sources.forEach(function (s) { total += s.seq.length; });
+    var total = 0, endless = false;
+    F.sources.forEach(function (s) { if (s.endless) endless = true; total += s.seq.length; });
     return {
-      level: level, F: F,
+      level: level, F: F, endless: endless,
+      rng: (level.seed || 12345) >>> 0,
+      binBusy: F.bins.map(function () { return 0; }),
       gateDecide: null, // gancho do validador para o bloqueador
       gateOpened: F.devices.map(function () { return -1; }), // tick da última reabertura
       tick: 0, status: 'planning',
       items: [], nextId: 1,
       lanes: new Map(),
       dev: F.devices.map(function (d) { return d.type === 'gate' ? (d.init ? C.GATE_TICKS : 0) : d.init; }),
+      placements: placements || {},
       src: F.sources.map(function (s) {
-        return { idx: 0, made: 0, timer: s.interval - s.delay, pressure: 0, blocked: false };
+        return { idx: 0, made: 0, timer: s.interval - s.delay, pressure: 0, blocked: false, eseq: s.endless ? [] : null };
       }),
       binCount: F.bins.map(function () { return 0; }),
       total: total, delivered: 0,
@@ -53,8 +56,13 @@
     if (sim.status === 'won' || sim.status === 'failed') return false;
     var d = sim.F.devices[devIndex];
     var t = sim.F.tiles[d.tile];
+    if (d.type === 'rev' && revLoad(sim, devIndex) > 0) {
+      // não dá para inverter com objetos em cima
+      sim.events.push({ type: 'refused', dev: devIndex, tile: d.tile });
+      return false;
+    }
     if (d.type === 'gate') sim.dev[devIndex] = sim.dev[devIndex] > 0 ? 0 : sim.tick + C.GATE_TICKS;
-    else sim.dev[devIndex] = (sim.dev[devIndex] + 1) % t.outs.length;
+    else sim.dev[devIndex] = (sim.dev[devIndex] + 1) % FF.Routing.nStates(t);
     if (sim.status === 'planning') sim.planTaps++; else sim.taps++;
     sim.events.push({ type: 'toggle', dev: devIndex, tile: d.tile, state: sim.dev[devIndex] });
     return true;
@@ -67,7 +75,24 @@
     sim.events.push({ type: 'fail', reason: reason, tile: sim.fail.tile });
   }
 
-  function routeOnEnter(sim, X, N) {
+  function revLoad(sim, d) {
+    var n = 0, tl = sim.F.devices[d].tiles;
+    for (var i = 0; i < tl.length; i++) n += tileLoad(sim, tl[i]);
+    return n;
+  }
+
+  function routeOnEnter(sim, X, N, from) {
+    if (N.type === 'rev') {
+      // vindo de dentro do mesmo grupo: segue o sentido atual; de fora: é uma decisão
+      if (from && from.type === 'rev' && from.dev === N.dev) return N.dirs[sim.dev[N.dev]];
+      var rs = sim.decide ? sim.decide(sim, X, N) : sim.dev[N.dev];
+      return N.dirs[rs];
+    }
+    if (N.type === 'filter') {
+      if (N.dev < 0) return FF.Routing.filterExit(N, 0, X.cat);
+      var fs = sim.decide ? sim.decide(sim, X, N) : sim.dev[N.dev];
+      return FF.Routing.filterExit(N, fs, X.cat);
+    }
     if (N.type === 'diverter' || N.type === 'distributor') {
       var st = sim.decide ? sim.decide(sim, X, N) : sim.dev[N.dev];
       if (N.type === 'distributor') {
@@ -77,14 +102,15 @@
       }
       return N.outs[st];
     }
-    return FF.Routing.route(N, X.ins, sim.dev);
+    return FF.Routing.route(N, X.ins, sim.dev, X.cat);
   }
 
   function deliver(sim, X, T) {
     X.dead = true;
-    if (X.cat === T.cat) {
+    if (FF.binAccepts(T.cat, X.cat)) {
       sim.delivered++;
       sim.binCount[T.bin]++;
+      if (T.press) sim.binBusy[T.bin] = sim.tick + T.press;
       sim.events.push({ type: 'deliver', tile: T.i, cat: X.cat, bin: T.bin });
     } else {
       sim.events.push({ type: 'wrong', tile: T.i, cat: X.cat });
@@ -102,19 +128,34 @@
     if (X.half === 0) {
       if (X.outs === SINK) { deliver(sim, X, T); return; }
       X.half = 1;
+      if (T.type === 'paint' && X.cat !== 'X' && X.cat !== T.color) {
+        X.cat = T.color; // pintor: troca a cor (defeituoso não aceita tinta)
+        sim.events.push({ type: 'paint', tile: T.i, cat: X.cat });
+      }
     } else {
       var N = F.nb(T, X.outs);
       X.half = 0; X.tile = N.i; X.ins = opp(X.outs);
-      X.outs = routeOnEnter(sim, X, N);
+      X.outs = routeOnEnter(sim, X, N, T);
     }
     CV.laneAdd(sim, X);
+  }
+
+  /* Modo infinito: o ritmo acelera a cada objeto produzido. */
+  function endlessInterval(S, st) {
+    var E = S.endless;
+    return Math.max(E.min, Math.round(E.start - st.made * E.step));
+  }
+  function endlessCat(sim, S) {
+    sim.rng = (Math.imul(sim.rng, 1103515245) + 12345) >>> 0;
+    var cats = S.endless.cats;
+    return cats[(sim.rng >>> 8) % cats.length];
   }
 
   function spawn(sim, si) {
     var S = sim.F.sources[si], st = sim.src[si];
     var T = sim.F.tiles[S.tile];
     var it = {
-      id: sim.nextId++, cat: S.seq[st.idx], src: si,
+      id: sim.nextId++, cat: S.endless ? st.eseq[st.idx] : S.seq[st.idx], src: si,
       tile: S.tile, half: 1, ins: -1, outs: T.out, p: 0,
       adv: 0, stall: 0, born: sim.tick, dead: false
     };
@@ -143,10 +184,11 @@
       var S = F.sources[i], st = sim.src[i];
       st.blocked = false;
       // a fonte produz no seu ritmo para o depósito, esteja a esteira livre ou não
-      if (st.made < S.seq.length) {
+      if (S.endless || st.made < S.seq.length) {
         st.timer++;
-        if (st.timer >= S.interval) {
+        if (st.timer >= (S.endless ? endlessInterval(S, st) : S.interval * (1 + (S.waits[st.made] || 0)))) {
           if (st.made - st.idx >= C.HOPPER_MAX) { fail(sim, 'overload', { tile: S.tile, src: i, jamTile: jamOrigin(sim) }); return; }
+          if (S.endless) st.eseq.push(endlessCat(sim, S));
           st.made++;
           st.timer = 0;
           if (st.made - st.idx === C.HOPPER_WARN) sim.events.push({ type: 'warn', tile: S.tile });
@@ -181,7 +223,7 @@
 
     // 3) Fim de fase
     var allEmitted = true;
-    for (i = 0; i < F.sources.length; i++) if (sim.src[i].idx < F.sources[i].seq.length) allEmitted = false;
+    for (i = 0; i < F.sources.length; i++) if (F.sources[i].endless || sim.src[i].idx < F.sources[i].seq.length) allEmitted = false;
     if (allEmitted && sim.items.length === 0) {
       sim.status = 'won';
       sim.events.push({ type: 'win' });
@@ -189,7 +231,7 @@
     }
     // Se alguma fonte ainda vai produzir, a sobrecarga cuida do caso; senão, parado = travado.
     var stillProducing = false;
-    for (i = 0; i < F.sources.length; i++) if (sim.src[i].made < F.sources[i].seq.length) stillProducing = true;
+    for (i = 0; i < F.sources.length; i++) if (F.sources[i].endless || sim.src[i].made < F.sources[i].seq.length) stillProducing = true;
     if (!stillProducing && sim.items.length && sim.tick - sim.lastMove > C.GRIDLOCK_TICKS) {
       fail(sim, 'gridlock', { tile: jamOrigin(sim), jamTile: jamOrigin(sim) });
       return;
@@ -231,8 +273,9 @@
     var c = Object.assign({}, sim);
     c.items = sim.items.map(function (x) { return Object.assign({}, x); });
     c.dev = sim.dev.slice();
-    c.src = sim.src.map(function (s) { return Object.assign({}, s); });
+    c.src = sim.src.map(function (s) { var o = Object.assign({}, s); if (s.eseq) o.eseq = s.eseq.slice(); return o; });
     c.binCount = sim.binCount.slice();
+    c.binBusy = sim.binBusy.slice();
     c.gateOpened = sim.gateOpened.slice();
     c.events = [];
     c.fail = sim.fail ? Object.assign({}, sim.fail) : null;
@@ -252,6 +295,6 @@
 
   FF.Sim = {
     create: create, start: start, setPaused: setPaused, toggle: toggle,
-    step: step, evaluate: evaluate, jamOrigin: jamOrigin, clone: clone, tileLoad: tileLoad, fail: fail
+    step: step, evaluate: evaluate, revLoad: revLoad, jamOrigin: jamOrigin, clone: clone, tileLoad: tileLoad, fail: fail
   };
 })(globalThis.FF = globalThis.FF || {});

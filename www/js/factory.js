@@ -18,20 +18,27 @@
     return d;
   }
 
-  function buildFactory(def) {
+  // placements: { indiceDoBloco: direção } — esteiras colocadas pelo jogador nas vagas '#'
+  function buildFactory(def, placements) {
+    placements = placements || {};
     var rows = def.map;
     var h = rows.length;
     var w = 0;
     for (var r = 0; r < h; r++) w = Math.max(w, rows[r].length);
     var tiles = new Array(w * h).fill(null);
-    var sources = [], bins = [], devices = [], errors = [];
+    var sources = [], bins = [], devices = [], errors = [], slots = [];
 
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
         var ch = rows[y][x] || '.';
         if (ch === '.' || ch === ' ') continue;
         var spec;
-        if (ARROWS[ch] !== undefined) spec = { type: 'conveyor', out: ARROWS[ch] };
+        if (ch === '#') {
+          slots.push(y * w + x);
+          if (placements[y * w + x] === undefined) continue;
+          spec = { type: 'conveyor', out: placements[y * w + x], placed: true };
+        }
+        else if (ARROWS[ch] !== undefined) spec = { type: 'conveyor', out: ARROWS[ch] };
         else if (ch === '+') spec = { type: 'crossing' };
         else if (def.legend && def.legend[ch]) spec = def.legend[ch];
         else { errors.push('Caractere desconhecido "' + ch + '" em (' + x + ',' + y + ')'); continue; }
@@ -46,7 +53,28 @@
         };
         switch (spec.type) {
           case 'conveyor':
-            t.out = dirOf(spec.out); break;
+            t.out = dirOf(spec.out); if (spec.placed) t.placed = true; break;
+          case 'fast':
+            t.type = 'conveyor'; t.out = dirOf(spec.out); t.speed = C.FAST_SPEED; t.fast = true; break;
+          case 'paint':
+            t.out = dirOf(spec.out); t.color = spec.color;
+            if (!FF.CATS[spec.color]) errors.push('Cor inválida no pintor: ' + spec.color);
+            break;
+          case 'filter':
+            t.outs = spec.outs.map(dirOf); t.colors = spec.colors.split ? spec.colors.split('') : spec.colors;
+            if (t.colors.length > 1) { // com uma cor só o filtro é automático (não tocável)
+              t.dev = devices.length;
+              devices.push({ tile: t.i, type: 'filter', init: spec.state || 0 });
+            }
+            if (t.outs.length !== 2) errors.push('Filtro precisa de 2 saídas (cor escolhida, demais)');
+            break;
+          case 'rev':
+            t.axis = spec.axis === 'V' ? 'V' : 'H';
+            t.dirs = t.axis === 'H' ? [1, 3] : [2, 0];
+            t.revInit = spec.state || 0;
+            break;
+          case 'bridge':
+            break;
           case 'slow':
             t.type = 'conveyor'; t.out = dirOf(spec.out); t.speed = C.SLOW_SPEED; t.slow = true; break;
           case 'gate':
@@ -65,7 +93,10 @@
             t.src = sources.length;
             sources.push({
               tile: t.i,
-              seq: String(spec.seq).replace(/\s+/g, '').split(''),
+              endless: spec.endless || null,
+              // '_' na sequência = pausa de um intervalo antes do próximo objeto
+              seq: spec.endless ? [] : String(spec.seq).replace(/[\s_]+/g, '').split(''),
+              waits: spec.endless ? [] : (String(spec.seq).replace(/\s+/g, '').match(/_*[^_]/g) || []).map(function (m) { return m.length - 1; }),
               interval: spec.interval || C.DEFAULT_INTERVAL,
               delay: spec.delay !== undefined ? spec.delay : C.FIRST_DELAY,
               label: spec.label || String.fromCharCode(65 + t.src)
@@ -73,7 +104,8 @@
             break;
           case 'bin':
             t.cat = spec.cat; t.bin = bins.length;
-            bins.push({ tile: t.i, cat: spec.cat });
+            t.cap = spec.cap || 0; t.press = spec.press || 0;
+            bins.push({ tile: t.i, cat: spec.cat, cap: t.cap, press: t.press });
             if (!FF.CATS[spec.cat]) errors.push('Categoria inválida no recipiente: ' + spec.cat);
             break;
           case 'diverter':
@@ -101,9 +133,9 @@
       if (!t) return;
       for (var s = 0; s < 4; s++) {
         switch (t.type) {
-          case 'conveyor': case 'gate': t.accepts[s] = s !== t.out; break;
-          case 'diverter': case 'distributor': t.accepts[s] = t.outs.indexOf(s) < 0; break;
-          case 'crossing': t.accepts[s] = true; break;
+          case 'conveyor': case 'gate': case 'paint': t.accepts[s] = s !== t.out; break;
+          case 'diverter': case 'distributor': case 'filter': t.accepts[s] = t.outs.indexOf(s) < 0; break;
+          case 'crossing': case 'bridge': case 'rev': t.accepts[s] = true; break; // reversível: lado de saída é fechado em tempo real
           case 'bin': t.accepts[s] = true; break;
           default: t.accepts[s] = false;
         }
@@ -113,15 +145,16 @@
     // Saídas possíveis (cruzamentos dependem de quem os alimenta: ponto fixo)
     tiles.forEach(function (t) {
       if (!t) return;
-      if (t.type === 'conveyor' || t.type === 'source' || t.type === 'gate') t.exits = [t.out];
-      else if (t.type === 'diverter' || t.type === 'distributor') t.exits = t.outs.slice();
+      if (t.type === 'conveyor' || t.type === 'source' || t.type === 'gate' || t.type === 'paint') t.exits = [t.out];
+      else if (t.type === 'diverter' || t.type === 'distributor' || t.type === 'filter') t.exits = t.outs.slice();
+      else if (t.type === 'rev') t.exits = t.dirs.slice();
       else t.exits = [];
     });
     var changed = true, guard = 0;
     while (changed && guard++ < 64) {
       changed = false;
       tiles.forEach(function (t) {
-        if (!t || t.type !== 'crossing') return;
+        if (!t || (t.type !== 'crossing' && t.type !== 'bridge')) return;
         var ex = [];
         for (var s = 0; s < 4; s++) {
           var src = nb(t, opp(s)); // vizinho do lado oposto empurra na direção s
@@ -140,9 +173,24 @@
       }
     });
 
+    // Esteiras reversíveis vizinhas no mesmo eixo formam um grupo = um dispositivo
+    tiles.forEach(function (t) {
+      if (!t || t.type !== 'rev' || t.dev >= 0) return;
+      var group = [t], q = [t];
+      t.dev = devices.length;
+      while (q.length) {
+        var c = q.pop();
+        c.dirs.forEach(function (d) {
+          var n = nb(c, d);
+          if (n && n.type === 'rev' && n.axis === c.axis && n.dev < 0) { n.dev = t.dev; group.push(n); q.push(n); }
+        });
+      }
+      devices.push({ tile: t.i, type: 'rev', tiles: group.map(function (g) { return g.i; }), init: t.revInit });
+    });
+
     return {
       w: w, h: h, tiles: tiles, sources: sources, bins: bins,
-      devices: devices, errors: errors, nb: nb, def: def
+      devices: devices, errors: errors, nb: nb, def: def, slots: slots, placements: placements
     };
   }
 

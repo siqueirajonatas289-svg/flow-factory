@@ -11,7 +11,8 @@ fs.mkdirSync(out, { recursive: true });
 const files = [
   ['node_modules/@capacitor/core/dist/capacitor.js', 'capacitor.js'],
   ['node_modules/@capacitor/app/dist/plugin.js', 'capacitor-app.js'],
-  ['node_modules/@capacitor/haptics/dist/plugin.js', 'capacitor-haptics.js']
+  ['node_modules/@capacitor/haptics/dist/plugin.js', 'capacitor-haptics.js'],
+  ['node_modules/@capacitor/clipboard/dist/plugin.js', 'capacitor-clipboard.js']
 ];
 for (const [src, dst] of files) {
   const from = path.join(root, src);

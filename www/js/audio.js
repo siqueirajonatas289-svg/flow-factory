@@ -123,7 +123,8 @@
       tone(sfxBus, 'square', 220, t, 0.09, 0.08, { to: 150, lp: 1200 });
     },
     gateOpen: function (t) { tone(sfxBus, 'triangle', 330, t, 0.08, 0.06, { to: 495 }); },
-    cycle: function (t) { tone(sfxBus, 'sine', 1320, t, 0.03, 0.03); }
+    cycle: function (t) { tone(sfxBus, 'sine', 1320, t, 0.03, 0.03); },
+    paint: function (t) { noise(sfxBus, t, 0.12, 0.08, 3000); }
   };
 
   function play(name, arg) {

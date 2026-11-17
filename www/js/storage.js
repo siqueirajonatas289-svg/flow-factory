@@ -8,7 +8,7 @@
   var data = null;
 
   function defaults() {
-    return { version: 1, levels: {}, settings: { music: true, sfx: true, vibration: true } };
+    return { version: 1, levels: {}, settings: { music: true, sfx: true, vibration: true }, extra: { endlessBest: 0, dailyCount: 0, daily: {} } };
   }
 
   function load() {
@@ -19,6 +19,7 @@
         var parsed = JSON.parse(raw);
         if (parsed && parsed.version === 1) {
           data.levels = parsed.levels || {};
+          data.extra = Object.assign(data.extra, parsed.extra || {});
           Object.assign(data.settings, parsed.settings || {});
         }
       }
@@ -48,6 +49,16 @@
     save();
     return better;
   }
+
+  // Mescla um resultado vindo de um código de transferência (fica o melhor).
+  function mergeResult(id, stars) {
+    var cur = levelResult(id);
+    if (cur && cur.done && cur.stars >= stars) return false;
+    get().levels[id] = Object.assign({}, cur || {}, { done: true, stars: Math.max(stars, cur ? cur.stars || 0 : 0) });
+    return true;
+  }
+
+  function extra() { return get().extra; }
 
   function isUnlocked(id) {
     var i = FF.levelIndex(id);
@@ -89,8 +100,22 @@
     save();
   }
 
+  // Desafio diário: guarda as estrelas por data e conta quantos dias foram concluídos.
+  function recordDaily(dateKey, stars) {
+    var x = extra(), prev = x.daily[dateKey] || 0;
+    if (!prev) x.dailyCount = (x.dailyCount || 0) + 1;
+    x.daily[dateKey] = Math.max(prev, stars);
+    save();
+  }
+  function recordEndless(score) {
+    var x = extra(), rec = score > (x.endlessBest || 0);
+    if (rec) { x.endlessBest = score; save(); }
+    return rec;
+  }
+
   FF.Storage = {
     load: load, save: save, levelResult: levelResult, recordWin: recordWin, isUnlocked: isUnlocked,
+    mergeResult: mergeResult, extra: extra, recordDaily: recordDaily, recordEndless: recordEndless,
     totals: totals, nextLevelId: nextLevelId, setting: setting, reset: reset, KEY: KEY
   };
 

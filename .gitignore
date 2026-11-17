@@ -10,3 +10,4 @@ android/.gradle/
 android/keystore.properties
 *.jks
 *.keystore
+__pycache__/

@@ -14,10 +14,10 @@
 const { solve, replay, FF } = require('./solver');
 const C = FF.CONFIG;
 
-function structural(level) {
+function structural(level, placements) {
   const errors = [], warnings = [];
   let F;
-  try { F = FF.buildFactory(level); } catch (e) { return { errors: [e.message], warnings }; }
+  try { F = FF.buildFactory(level, placements); } catch (e) { return { errors: [e.message], warnings }; }
   errors.push(...F.errors);
   if (!F.sources.length) errors.push('Nenhuma fonte');
   if (!F.bins.length) errors.push('Nenhum recipiente');
@@ -30,7 +30,7 @@ function structural(level) {
       if (!N) errors.push(`Conexão quebrada: ${where} aponta para fora do mapa`);
       else if (!N.accepts[FF.opp(e)]) errors.push(`Conexão quebrada: ${where} aponta para ${N.type} que não aceita entrada`);
     });
-    if (t.type === 'crossing') {
+    if (t.type === 'crossing' || t.type === 'bridge') {
       if ((t.feeders[0] && t.feeders[2]) || (t.feeders[1] && t.feeders[3]))
         errors.push(`Cruzamento com fluxo frontal em (${t.x},${t.y})`);
       if (t.exits.length < 2) warnings.push(`Cruzamento subutilizado em (${t.x},${t.y})`);
@@ -40,6 +40,11 @@ function structural(level) {
       if (!t.feeders.some(Boolean)) errors.push(`Desviador sem entrada em (${t.x},${t.y})`);
     }
     if (t.type === 'distributor' && !t.feeders.some(Boolean)) errors.push(`Distribuidor sem entrada em (${t.x},${t.y})`);
+    if (t.type === 'filter' && !t.feeders.some(Boolean)) errors.push(`Filtro sem entrada em (${t.x},${t.y})`);
+    if (t.type === 'rev') {
+      // pontas da reversível só recebem dela (senão haveria fluxo frontal)
+      t.dirs.forEach(d => { const n = F.nb(t, d); if (n && n.exits.indexOf(FF.opp(d)) >= 0 && !(n.type === 'rev' && n.dev === t.dev)) errors.push(`Reversível em (${t.x},${t.y}) recebe pela ponta`); });
+    }
     if (t.type === 'gate' && !t.feeders.some(Boolean)) errors.push(`Bloqueador sem entrada em (${t.x},${t.y})`);
   });
 
@@ -56,9 +61,29 @@ function structural(level) {
 
   const cats = new Set();
   F.sources.forEach(s => s.seq.forEach(c => { cats.add(c); if (!FF.CATS[c]) errors.push('Categoria inválida: ' + c); }));
-  cats.forEach(c => { if (!F.bins.some(b => b.cat === c)) errors.push(`Sem recipiente para ${c}`); });
-  F.bins.forEach(b => { if (!cats.has(b.cat)) warnings.push(`Recipiente ${b.cat} nunca recebe objetos`); });
+  F.tiles.forEach(t => { if (t && t.type === 'paint') cats.add(t.color); });
+  // cada cor de cada fonte precisa ter algum caminho até um recipiente que a aceite (pintores contam)
+  const reach = require('./solver').computeReach(F);
+  F.sources.forEach(s => {
+    const t = F.tiles[s.tile];
+    new Set(s.seq).forEach(c => { if (!reach.get(t, t.out).has(c)) errors.push(`Sem recipiente para ${c} da fonte ${s.label}`); });
+  });
+  F.bins.forEach(b => { if (!cats.has(b.cat) && !cats.has('W')) warnings.push(`Recipiente ${b.cat} nunca recebe objetos`); });
+  // capacidade total por cor precisa caber
+  F.bins.forEach(b => { if (b.cap && !F.bins.some(o => o !== b && o.cat === b.cat) && !F.tiles.some(t => t && t.type === 'paint')) {
+    const need = F.sources.reduce((a, s) => a + s.seq.filter(c => c === b.cat).length, 0);
+    if (need > b.cap) errors.push(`Recipiente ${b.cat} cabe ${b.cap} mas recebe ${need} e não há outro`);
+  } });
   return { errors, warnings, F };
+}
+
+// Dois objetos no mesmo bloco de ponte em eixos diferentes não colidem (um passa por cima).
+function overBridge(F, a, b) {
+  if (a.tile !== b.tile) return false;
+  const t = F.tiles[a.tile];
+  if (t.type !== 'bridge') return false;
+  const axis = it => ((it.half === 0 ? it.ins : it.outs) & 1);
+  return axis(a) !== axis(b);
 }
 
 function minDistanceCheck(level, sol) {
@@ -69,6 +94,7 @@ function minDistanceCheck(level, sol) {
     for (let i = 0; i < its.length; i++) {
       FF.Geo.itemPos(s.F, its[i], p);
       for (let j = i + 1; j < its.length; j++) {
+        if (overBridge(s.F, its[i], its[j])) continue;
         FF.Geo.itemPos(s.F, its[j], q);
         const d = Math.hypot(p.x - q.x, p.y - q.y);
         if (d < minD) { minD = d; worst = { tick: s.tick, a: its[i].id, b: its[j].id }; }
@@ -76,6 +102,41 @@ function minDistanceCheck(level, sol) {
     }
   });
   return { minD, worst, sim };
+}
+
+/* Fases de montagem: o jogador coloca até `build.pieces` esteiras nas vagas '#'.
+ * Enumera as montagens válidas (sem saída quebrada, toda peça alimentada) e resolve cada uma. */
+function buildCandidates(level) {
+  const F0 = FF.buildFactory(level);
+  const slots = F0.slots, max = level.build.pieces, out = [];
+  const cur = {};
+  (function rec(k, used) {
+    if (k === slots.length) {
+      if (!used) return;
+      const st = structural(level, Object.assign({}, cur));
+      if (st.errors.length) return;
+      // toda peça colocada precisa ser usada (alcançável e alimentada)
+      if (st.warnings.some(w => w.startsWith('Bloco inalcançável: conveyor'))) return;
+      out.push(Object.assign({}, cur));
+      return;
+    }
+    rec(k + 1, used);
+    if (used < max) for (let d = 0; d < 4; d++) { cur[slots[k]] = d; rec(k + 1, used + 1); delete cur[slots[k]]; }
+  })(0, 0);
+  return out;
+}
+
+function solveBuild(level, opts) {
+  const cands = buildCandidates(level);
+  let best = null, all = { work: 0, solutions: 0, exhaustive: true, failures: {}, cands: cands.length, solvedLayouts: 0 };
+  for (const pl of cands) {
+    const r = solve(level, Object.assign({}, opts, { placements: pl, maxWork: Math.min(opts.maxWork || 4e6, 6e5) }));
+    all.work += r.work; all.solutions += r.solutions; if (!r.exhaustive) all.exhaustive = false;
+    if (r.bestClean) all.solvedLayouts++;
+    if (r.bestClean && (!best || r.bestClean.taps < best.bestClean.taps)) best = r;
+  }
+  if (!best) return Object.assign(all, { best: null, bestClean: null });
+  return Object.assign(all, { best: best.best, bestClean: best.bestClean });
 }
 
 function idleRun(level) {
@@ -87,12 +148,14 @@ function idleRun(level) {
 
 function validateLevel(level) {
   const rep = { id: level.id, name: level.name, ok: true, errors: [], warnings: [], info: {} };
-  const st = structural(level);
-  rep.errors.push(...st.errors); rep.warnings.push(...st.warnings);
+  const st = level.build ? structural(level, {}) : structural(level);
+  rep.errors.push(...st.errors.filter(e => !level.build || !/Sem recipiente|Conexão/.test(e)));
+  rep.warnings.push(...st.warnings.filter(w => !level.build || !w.startsWith('Bloco inalcançável')));
   if (rep.errors.length) { rep.ok = false; return rep; }
 
   const t0 = Date.now();
-  const res = solve(level, { maxWork: level.solverWork || 4e6 });
+  const res = level.build ? solveBuild(level, { maxWork: level.solverWork || 4e6 }) : solve(level, { maxWork: level.solverWork || 4e6 });
+  if (level.build) { rep.info.layouts = res.cands; rep.info.solvedLayouts = res.solvedLayouts; }
   rep.info.ms = Date.now() - t0;
   rep.info.exhaustive = res.exhaustive;
   rep.info.solutions = res.solutions;
@@ -104,7 +167,7 @@ function validateLevel(level) {
   rep.info.cleanTaps = res.bestClean ? res.bestClean.taps : null;
   rep.info.seconds = +(ref.ticks / C.TICK_RATE).toFixed(1);
   rep.info.minWindow = ref.minWindow === Infinity ? null : +(ref.minWindow / C.TICK_RATE).toFixed(2);
-  rep.info.reference = { init: ref.init, schedule: ref.schedule };
+  rep.info.reference = { init: ref.init, schedule: ref.schedule, placements: ref.placements || {} };
 
   if (level.par === undefined) rep.errors.push(`Defina par (sugestão: ${ref.taps})`);
   else if (res.bestClean && level.par < res.bestClean.taps) rep.errors.push(`par=${level.par} é menor que o mínimo possível (${res.bestClean.taps})`);
@@ -156,4 +219,4 @@ if (require.main === module) {
   process.exit(bad ? 1 : 0);
 }
 
-module.exports = { validateLevel, structural };
+module.exports = { validateLevel, structural, solveBuild, buildCandidates };

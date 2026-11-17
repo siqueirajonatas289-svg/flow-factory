@@ -51,9 +51,14 @@
   // está a dX unidades do centro, entrando pelo lado xEntry e saindo por xExit.
   function nodeLimit(sim, X, T, dX, xEntry, xExit) {
     var F = sim.F, lim = Infinity, s, a, j, Y, d, l;
+    var bridge = T.type === 'bridge';
+    // Recipiente fechado: a fila espera na linha de parada
+    if (T.type === 'bin' && dX >= C.BIN_STOP && FF.Routing.binClosed(sim, T)) lim = dX - C.BIN_STOP;
     // Concorrentes que chegam por outros lados (zíper)
     for (s = 0; s < 4; s++) {
       if (s === xEntry || !T.accepts[s]) continue;
+      if (bridge && (s & 1) !== (xEntry & 1)) continue;         // ponte: o outro eixo passa por cima
+      if (T.type === 'rev' && s === T.dirs[sim.dev[T.dev]]) continue; // ponta fechada da reversível
       a = sim.lanes.get(laneKey(T.i, 0, s));
       if (a) {
         for (j = 0; j < a.length; j++) {
@@ -75,6 +80,7 @@
     // Objetos que acabaram de sair do centro
     for (j = 0; j < T.exits.length; j++) {
       var e = T.exits[j];
+      if (bridge && (e & 1) !== (xEntry & 1)) continue;
       Y = laneLast(sim, laneKey(T.i, 1, e));
       if (!Y) continue;
       var gap = (xExit === UNKNOWN || xExit === e) ? C.GAP : C.NODE_GAP;
@@ -102,7 +108,7 @@
       }
       if (X.outs !== SINK) {
         N = F.nb(T, X.outs); ent = opp(X.outs);
-        if (!N || !N.accepts[ent]) lim = Math.min(lim, dC + HALF - C.EDGE_STOP);
+        if (!FF.Routing.canEnter(sim, N, ent)) lim = Math.min(lim, dC + HALF - C.EDGE_STOP);
         else {
           Y = laneLast(sim, laneKey(N.i, 0, ent));
           if (Y) lim = Math.min(lim, dC + HALF + Y.p - C.GAP);
@@ -111,7 +117,7 @@
     } else {
       var dE = HALF - X.p;
       N = F.nb(T, X.outs); ent = opp(X.outs);
-      if (!N || !N.accepts[ent]) lim = Math.min(lim, dE - C.EDGE_STOP);
+      if (!FF.Routing.canEnter(sim, N, ent)) lim = Math.min(lim, dE - C.EDGE_STOP);
       else {
         Y = laneLast(sim, laneKey(N.i, 0, ent));
         if (Y) lim = Math.min(lim, dE + Y.p - C.GAP);

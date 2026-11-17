@@ -9,18 +9,20 @@ sem imagens (tudo é desenhado por código), funciona offline.
 
 ---
 
-## Versão 1.0.0: o que está pronto
+## Versão 1.1.0: o que está pronto
 
 | Área | Situação |
 |---|---|
 | Etapa 1 (fundação) | Completa |
 | Etapa 2 (produção) | Completa: esteiras, esteira lenta, desviador, cruzamento, distribuidor, bloqueador, junções em zíper, congestionamento, depósito/sobrecarga, pausa, reinício |
-| Etapa 3 (progressão) | Completa: 30 fases em 6 capítulos, tutorial interativo, estrelas, salvamento |
+| Etapa 3 (progressão) | Completa: 80 fases em 16 capítulos, tutorial interativo para cada mecânica nova, estrelas, salvamento |
+| Modos extras | Desafio do dia (uma fase verificada, sorteada pela data) e Modo infinito (ritmo que acelera, recorde) |
+| Código de transferência | Em Configurações: copiar o código de progresso e colar em outro aparelho ou depois de reinstalar. Offline, sem conta |
 | Etapa 4 (polimento) | Completa: animações, partículas, efeitos e música sintetizados, vibração nativa, áreas seguras |
 | Etapa 5 (Android) | Completa: projeto `android/` (Capacitor 8), ícones/splash, workflows do GitHub Actions para APK de teste e AAB assinado. Veja **[ANDROID.md](ANDROID.md)** |
 
-Testes: 19 do motor, 30/30 fases aprovadas pelo validador (solução exata, executável por humano,
-replay com toques reais, sem sobreposição) e 59 verificações ponta a ponta no navegador.
+Testes: 29 do motor, 80/80 fases aprovadas pelo validador (solução exata, executável por humano,
+replay com toques reais, sem sobreposição) e 123 verificações ponta a ponta no navegador.
 
 ### Dispositivos
 - **Desviador** (círculo ciano): duas saídas; um toque alterna. A rota trava quando o objeto entra.
@@ -29,11 +31,32 @@ replay com toques reais, sem sobreposição) e 59 verificações ponta a ponta n
 - **Bloqueador** (barreira): um toque fecha por 2 s e reabre sozinho; tocar de novo reabre na hora.
 - **Esteira lenta** (trilhos âmbar): metade da vazão. Gargalo.
 - **Fonte**: produz no seu ritmo para um depósito de 4. Dois esperando = alerta; depósito cheio = sobrecarga.
+- **Pintor** (pincel): muda a cor de quem passa. Não pinta o defeituoso.
+- **Filtro** (pontos coloridos): a cor marcada sai por um lado, o resto pelo outro. Com várias cores, um toque troca a cor.
+- **Esteira expressa** (trilhos índigo): o dobro da velocidade; objetos ultrapassam outras linhas.
+- **Ponte**: a linha de cima passa por cima da de baixo, sem ninguém esperar.
+- **Recipiente com número**: capacidade limitada; cheio, fecha com cadeado.
+- **Prensa**: aceita um objeto e fica fechada enquanto o pistão desce.
+- **Esteira reversível**: um toque inverte o sentido, mas só vazia; com carga, recusa.
+- **Curinga** (estrela dourada): vale em qualquer recipiente, menos no descarte. **Defeituoso** (hexágono cinza): só no descarte.
+- **Vaga de montagem** (tracejada): o jogador coloca as esteiras antes de iniciar.
 
 ### Capítulos
 1. FIRST SHIFT: fundamentos · 2. NEW ROUTES: cascatas, junções, primeiro cruzamento ·
 3. OVERLOAD: esteira lenta, bloqueador, distribuidor · 4. CROSSING LINES: cruzamentos e rotas alternativas ·
-5. FACTORY CHAOS: três linhas e quatro cores · 6. MASTER OPERATOR: tudo junto
+5. FACTORY CHAOS: três linhas e quatro cores · 6. MASTER OPERATOR: tudo junto ·
+7. PAINT SHOP: pintor · 8. SORTING: filtro e defeituosos · 9. EXPRESS: esteira expressa ·
+10. OVERPASS: pontes · 11. FULL HOUSE: capacidade · 12. HEAVY PRESS: prensa ·
+13. TWO-WAY: esteira reversível · 14. WILD & DEFECTS: curinga · 15. BLUEPRINT: montagem ·
+16. GRAND FACTORY: tudo junto
+
+### Salvar progresso (código de transferência)
+Em **Configurações → Copiar meu código de progresso** o jogo mostra e copia um texto como
+`FF-06J5-D778-2RHA-...`. Guarde (por exemplo, mandando para você mesmo no WhatsApp). Em outro
+celular, ou depois de reinstalar, use **Colar código → Recuperar progresso**. O código leva fases,
+estrelas, recorde do infinito e dias de desafio; tem verificação contra erro de digitação
+(CRC-16) e aceita minúsculas e espaços. Colar junta com o que já existe no aparelho, ficando
+sempre o melhor de cada fase: nunca apaga nada.
 
 ---
 
@@ -62,7 +85,9 @@ www/                     ← tudo que vai para o app (webDir do Capacitor)
   js/routing.js          regras de cada dispositivo (esteira, desviador, cruzamento, recipiente)
   js/conveyor.js         faixas, espaçamento, capacidade, zíper nos nós
   js/simulation.js       tick fixo, fontes, entregas, vitória, falha, estrelas
-  js/levels.js           capítulos e fases
+  js/levels.js           capítulos 1–6 (levels2.js: 7–10, levels3.js: 11–16)
+  js/modes.js            desafio do dia e modo infinito
+  js/transfer.js         código de transferência de progresso
   js/storage.js          progresso, configurações e vibração
   js/audio.js            efeitos e música generativa (Web Audio)
   js/renderer.js         desenho no Canvas
@@ -138,7 +163,7 @@ a simulação real entre elas. Para cada fase ele verifica:
     '.1.2.'
   ],
   legend: {
-    A: { type: 'source', out: 'S', seq: 'RRBB', interval: 110, delay: 20 },
+    A: { type: 'source', out: 'S', seq: 'RR__BB', interval: 110, delay: 20 }, // '_' = pausa de um intervalo
     d: { type: 'diverter', outs: ['W', 'E'], state: 0 },
     1: { type: 'bin', cat: 'R' }, 2: { type: 'bin', cat: 'B' }
   },
@@ -148,6 +173,11 @@ a simulação real entre elas. Para cada fase ele verifica:
 
 Rode `node tools/validate.js 3-1`: ele informa o mínimo de intervenções (use como `par`),
 a janela de reação mais apertada e qualquer problema estrutural.
+
+Para calibrar a dificuldade, adicione um campo `tune` com variações de sequência, ritmo e atraso
+(`tune: { A: { seq: [...], interval: [...], delay: [...] } }`) e rode
+`python3 tools/tune-batch.py 3-1`: ele testa as variações com o solucionador, escolhe a que fica
+mais perto da meta de toques da posição na campanha e grava `par` e a fonte na fase.
 
 ---
 

@@ -23,6 +23,23 @@
         ctx.closePath();
         break;
       }
+      case 'star': {
+        ctx.moveTo(x, y - s * 0.62);
+        for (var k = 1; k < 10; k++) {
+          var rr = k % 2 ? s * 0.27 : s * 0.62, aa = -Math.PI / 2 + k * Math.PI / 5;
+          ctx.lineTo(x + Math.cos(aa) * rr, y + Math.sin(aa) * rr);
+        }
+        ctx.closePath();
+        break;
+      }
+      case 'hex': {
+        for (var h = 0; h < 6; h++) {
+          var ha = h * Math.PI / 3;
+          ctx[h ? 'lineTo' : 'moveTo'](x + Math.cos(ha) * s * 0.52, y + Math.sin(ha) * s * 0.52);
+        }
+        ctx.closePath();
+        break;
+      }
       case 'diamond': {
         var d = s * 0.58;
         ctx.moveTo(x, y - d); ctx.lineTo(x + d, y); ctx.lineTo(x, y + d); ctx.lineTo(x - d, y); ctx.closePath();
@@ -59,6 +76,13 @@
     ctx.lineWidth = Math.max(1.2, s * 0.09);
     ctx.strokeStyle = cat.dark;
     ctx.stroke();
+    if (catKey === 'X') {
+      // rachadura do defeituoso
+      ctx.strokeStyle = cat.dark; ctx.lineWidth = Math.max(1, s * 0.07); ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(x - s * 0.2, y - s * 0.3); ctx.lineTo(x + s * 0.02, y - s * 0.02);
+      ctx.lineTo(x - s * 0.08, y + s * 0.1); ctx.lineTo(x + s * 0.18, y + s * 0.32); ctx.stroke();
+      return;
+    }
     // brilho
     ctx.save();
     ctx.globalAlpha = 0.45;
@@ -66,6 +90,11 @@
     ctx.fillStyle = cat.light;
     ctx.fill();
     ctx.restore();
+  }
+
+  function hexA(hex, a) {
+    var n = parseInt(hex.slice(1), 16);
+    return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
   }
 
   /* ---------- Renderer ---------- */
@@ -142,12 +171,24 @@
       if (!t) return;
       var s, any = false;
       switch (t.type) {
-        case 'conveyor': case 'gate':
+        case 'conveyor': case 'gate': case 'paint':
           for (s = 0; s < 4; s++) if (t.feeders[s]) { add(t, s, t.out, 'belt'); any = true; }
           if (!any) add(t, opp(t.out), t.out, 'belt');
           break;
         case 'distributor':
           for (s = 0; s < 4; s++) if (t.feeders[s]) { any = true; t.outs.forEach(function (o) { add(t, s, o, 'dist'); }); }
+          break;
+        case 'filter':
+          for (s = 0; s < 4; s++) if (t.feeders[s]) { any = true; t.outs.forEach(function (o) { add(t, s, o, 'filt'); }); }
+          break;
+        case 'bridge':
+          t.exits.forEach(function (e) { add(t, opp(e), e, (e & 1) ? 'bridgeLow' : 'bridgeHigh'); });
+          break;
+        case 'rev':
+          t.dirs.forEach(function (d) {
+            add(t, opp(d), d, 'rev');
+            for (s = 0; s < 4; s++) if (t.feeders[s] && s !== d && s !== opp(d)) add(t, s, d, 'rev');
+          });
           break;
         case 'diverter':
           for (s = 0; s < 4; s++) if (t.feeders[s]) { any = true; t.outs.forEach(function (o) { add(t, s, o, 'div'); }); }
@@ -193,6 +234,14 @@
       case 'wrong':
         this.burst(c.x, c.y, P.danger, 18, 1.4);
         break;
+      case 'refused':
+        this.revFlash = this.revFlash || {};
+        this.revFlash[ev.dev] = this.time + 0.5;
+        this.burst(c.x, c.y, P.danger, 6, 0.6);
+        break;
+      case 'paint':
+        this.burst(c.x, c.y, FF.CATS[ev.cat].color, 5, 0.5);
+        break;
       case 'toggle':
         this.fx.push({ kind: 'ring', x: c.x, y: c.y, life: 0, max: 0.35, color: P.cyan });
         break;
@@ -235,10 +284,12 @@
     var self = this;
     // rotas inativas dos desviadores primeiro: a rota ativa fica por cima
     var notNext = function (p) { return (p.role === 'div' || p.role === 'dist') && p.outs !== p.tile.outs[sim.dev[p.tile.dev]]; };
-    var ordered = this.paths.filter(notNext).concat(this.paths.filter(function (p) { return !notNext(p); }));
+    var low = this.paths.filter(function (p) { return p.role !== 'bridgeHigh'; });
+    var ordered = low.filter(notNext).concat(low.filter(function (p) { return !notNext(p); }));
     ['rail', 'belt', 'chev'].forEach(function (layer) {
       for (var i = 0; i < ordered.length; i++) self.drawPath(ctx, ordered[i], layer, jam);
     });
+    var high = this.paths.filter(function (p) { return p.role === 'bridgeHigh'; });
 
     // placas de cruzamento e desviadores (abaixo dos objetos)
     F.tiles.forEach(function (t) {
@@ -246,7 +297,9 @@
       if (t.type === 'crossing') self.drawCrossing(ctx, t);
       if (t.type === 'diverter') self.drawDiverter(ctx, t, dt);
       if (t.type === 'distributor') self.drawDistributor(ctx, t, dt);
+      if (t.type === 'filter') self.drawFilter(ctx, t, dt);
     });
+    this.drawSlots(ctx, F);
 
     // objetos
     var pos = {};
@@ -260,8 +313,26 @@
       it.p = saveP;
       var age = (sim.tick - it.born + alpha) / 10;
       var sc = it.ins < 0 && it.half === 1 ? Math.min(1, 0.35 + age * 0.65) : 1;
+      if (F.tiles[it.tile].type === 'bridge' && (((it.half === 0 ? it.ins : it.outs) & 1) === 0)) continue; // passa por cima: depois
       drawItem(ctx, it.cat, ox + pos.x * ts, oy + pos.y * ts, isz, { scale: sc });
     }
+    // pontes: deque elevado e os objetos que passam por cima
+    if (high.length) {
+      high.forEach(function (p) { self.drawBridgeDeck(ctx, p, jam); });
+      for (k = 0; k < sim.items.length; k++) {
+        var it2 = sim.items[k], T2 = F.tiles[it2.tile];
+        if (T2.type !== 'bridge' || (((it2.half === 0 ? it2.ins : it2.outs) & 1) !== 0)) continue;
+        var pb = running ? it2.p - it2.adv * (1 - alpha) : it2.p, sp2 = it2.p;
+        it2.p = pb < 0 ? 0 : pb; FF.Geo.itemPos(F, it2, pos); it2.p = sp2;
+        drawItem(ctx, it2.cat, ox + pos.x * ts, oy + pos.y * ts, isz * 1.08);
+      }
+    }
+    // bocais dos pintores e marcas das reversíveis por cima
+    F.tiles.forEach(function (t) {
+      if (!t) return;
+      if (t.type === 'paint') self.drawPainter(ctx, t);
+      if (t.type === 'rev' && F.devices[t.dev].tile === t.i) self.drawRevBadge(ctx, t);
+    });
 
     // barreiras dos bloqueadores por cima dos objetos
     F.devices.forEach(function (d, i) { if (d.type === 'gate') self.drawGate(ctx, F.tiles[d.tile], i, dt); });
@@ -333,6 +404,13 @@
       active = path.outs === cur;
       inactive = !active && path.role === 'div'; // o distribuidor usa todas as saídas
     }
+    if (path.role === 'rev') {
+      // só o sentido atual mostra divisas
+      active = path.outs === t.dirs[this.sim.dev[t.dev]];
+      if (!active && layer === 'chev') return;
+      if (!active && path.ins !== opp(path.outs)) return; // curvas do sentido inativo nem aparecem
+    }
+    if (path.role === 'filt') active = path.outs === t.outs[0];
     if (layer === 'rail' || layer === 'belt') {
       var sp = path.stroke;
       ctx.beginPath();
@@ -342,7 +420,7 @@
       ctx.lineJoin = 'round';
       if (layer === 'rail') {
         ctx.lineWidth = ts * 0.66;
-        ctx.strokeStyle = jam[t.i] ? P.warn : (inactive ? '#232c40' : (t.slow ? '#7a5a26' : P.rail));
+        ctx.strokeStyle = jam[t.i] ? P.warn : (inactive ? '#232c40' : (t.slow ? '#7a5a26' : t.fast ? '#3b4396' : t.placed ? '#3f6f7a' : P.rail));
         ctx.stroke();
       } else {
         ctx.lineWidth = ts * 0.54;
@@ -355,11 +433,12 @@
     if (inactive || (path.role === 'dist' && !active)) {
       if (path.role !== 'dist') return;
     }
-    var color = active ? 'rgba(47,230,230,0.55)' : (t.slow ? 'rgba(255,176,46,0.42)' : P.chevron);
+    var color = path.role === 'filt' ? (active ? hexA(FF.CATS[t.colors[t.dev >= 0 ? this.sim.dev[t.dev] : 0]].color, 0.6) : P.chevron)
+      : active ? 'rgba(47,230,230,0.55)' : (t.slow ? 'rgba(255,176,46,0.42)' : t.fast ? 'rgba(127,140,255,0.7)' : P.chevron);
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.max(1.5, ts * 0.06);
     ctx.lineCap = 'round';
-    var gapC = t.slow ? CHEV * 1.6 : CHEV;
+    var gapC = t.slow ? CHEV * 1.6 : t.fast ? CHEV * 0.7 : CHEV;
     var start = (this.beltDist * (t.speed / C.BASE_SPEED)) % gapC;
     var w = ts * 0.13, seg = 0, tmpA;
     for (var d = start; d < path.total - 0.02; d += gapC) {
@@ -531,6 +610,95 @@
     }
   };
 
+  Renderer.prototype.drawBridgeDeck = function (ctx, path, jam) {
+    var ts = this.ts, t = path.tile, bx = this.ox + t.x * ts, by = this.oy + t.y * ts, sp = path.stroke;
+    // sombra do deque sobre o eixo de baixo
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    var c = this.tileCenter(t.i);
+    ctx.fillRect(c.x - ts * 0.36 + ts * 0.06, by + ts * 0.02, ts * 0.72, ts * 0.96);
+    this.drawPath(ctx, path, 'rail', jam);
+    this.drawPath(ctx, path, 'belt', jam);
+    this.drawPath(ctx, path, 'chev', jam);
+    // guarda-corpos
+    ctx.strokeStyle = '#8a97b2'; ctx.lineWidth = Math.max(1.5, ts * 0.04);
+    ctx.beginPath();
+    ctx.moveTo(c.x - ts * 0.34, by + ts * 0.08); ctx.lineTo(c.x - ts * 0.34, by + ts * 0.92);
+    ctx.moveTo(c.x + ts * 0.34, by + ts * 0.08); ctx.lineTo(c.x + ts * 0.34, by + ts * 0.92);
+    ctx.stroke();
+  };
+
+  Renderer.prototype.drawPainter = function (ctx, t) {
+    var ts = this.ts, c = this.tileCenter(t.i), cat = FF.CATS[t.color];
+    var w = ts * 0.5, h = ts * 0.22, perp = (t.out & 1) ? 0 : 1; // bocal atravessado sobre a esteira
+    ctx.save(); ctx.translate(c.x, c.y); if (!perp) ctx.rotate(Math.PI / 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); roundRect(ctx, -w / 2 + 2, -h / 2 + 3, w, h, h * 0.4); ctx.fill();
+    ctx.fillStyle = '#2a3348'; ctx.strokeStyle = cat.color; ctx.lineWidth = Math.max(2, ts * 0.05);
+    ctx.beginPath(); roundRect(ctx, -w / 2, -h / 2, w, h, h * 0.4); ctx.fill(); ctx.stroke();
+    // bicos de spray
+    ctx.fillStyle = cat.color;
+    for (var k = -1; k <= 1; k++) { ctx.beginPath(); ctx.arc(k * w * 0.28, h * 0.62, ts * 0.035, 0, TAU); ctx.fill(); }
+    ctx.restore();
+    // forma da cor aplicada
+    shapePath(ctx, cat.shape, c.x, c.y, ts * 0.13);
+    ctx.fillStyle = cat.color; ctx.fill();
+  };
+
+  Renderer.prototype.drawFilter = function (ctx, t, dt) {
+    var sim = this.sim, ts = this.ts, c = this.tileCenter(t.i);
+    var fixed = t.dev < 0, col = t.colors[fixed ? 0 : sim.dev[t.dev]], cat = FF.CATS[col];
+    var r = ts * 0.27;
+    if (sim.status === 'planning' && !fixed) {
+      var pu = 0.5 + 0.5 * Math.sin(this.time * 3 + t.dev);
+      ctx.fillStyle = 'rgba(47,230,230,' + (0.06 + 0.08 * pu).toFixed(3) + ')';
+      ctx.beginPath(); ctx.arc(c.x, c.y, r * 1.8, 0, TAU); ctx.fill();
+    }
+    // funil (quadrado girado); cinza = automático
+    ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = '#0b1220'; ctx.strokeStyle = fixed ? '#8a97b2' : P.cyan; ctx.lineWidth = Math.max(2, ts * 0.05);
+    ctx.beginPath(); roundRect(ctx, -r * 0.8, -r * 0.8, r * 1.6, r * 1.6, r * 0.25); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    drawItem(ctx, col, c.x, c.y, ts * 0.24, { noShadow: true });
+    // marcador da saída da cor escolhida
+    var o = t.outs[0];
+    ctx.fillStyle = cat.color;
+    ctx.beginPath(); ctx.arc(c.x + FF.DX[o] * ts * 0.4, c.y + FF.DY[o] * ts * 0.4, ts * 0.06, 0, TAU); ctx.fill();
+    var o2 = t.outs[1];
+    ctx.strokeStyle = '#8a97b2'; ctx.lineWidth = Math.max(1.2, ts * 0.025);
+    ctx.beginPath(); ctx.arc(c.x + FF.DX[o2] * ts * 0.4, c.y + FF.DY[o2] * ts * 0.4, ts * 0.055, 0, TAU); ctx.stroke();
+  };
+
+  Renderer.prototype.drawRevBadge = function (ctx, t) {
+    var sim = this.sim, ts = this.ts, c = this.tileCenter(t.i), d = t.dirs[sim.dev[t.dev]];
+    var flash = this.revFlash && this.revFlash[t.dev] > this.time;
+    // seta dupla no canto: tocável e indica o sentido atual
+    var bx = c.x + (t.axis === 'H' ? 0 : ts * 0.3), by = c.y + (t.axis === 'H' ? -ts * 0.3 : 0);
+    ctx.fillStyle = '#0b1220'; ctx.strokeStyle = flash ? P.danger : P.cyan; ctx.lineWidth = Math.max(1.5, ts * 0.035);
+    ctx.beginPath(); ctx.arc(bx, by, ts * 0.14, 0, TAU); ctx.fill(); ctx.stroke();
+    ctx.save(); ctx.translate(bx, by); ctx.rotate(Math.atan2(FF.DY[d], FF.DX[d]));
+    ctx.fillStyle = flash ? P.danger : P.cyan;
+    ctx.beginPath(); ctx.moveTo(ts * 0.09, 0); ctx.lineTo(-ts * 0.05, -ts * 0.07); ctx.lineTo(-ts * 0.05, ts * 0.07); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  };
+
+  Renderer.prototype.drawSlots = function (ctx, F) {
+    if (!F.slots || !F.slots.length) return;
+    var ts = this.ts, sim = this.sim, self = this;
+    F.slots.forEach(function (i) {
+      if (F.tiles[i]) return; // já tem esteira colocada
+      var x = self.ox + (i % F.w) * ts, y = self.oy + Math.floor(i / F.w) * ts;
+      ctx.save();
+      ctx.setLineDash([ts * 0.12, ts * 0.08]);
+      ctx.strokeStyle = sim.status === 'planning' ? 'rgba(47,230,230,0.55)' : 'rgba(138,151,178,0.3)';
+      ctx.lineWidth = Math.max(1.5, ts * 0.03);
+      ctx.beginPath(); roundRect(ctx, x + ts * 0.1, y + ts * 0.1, ts * 0.8, ts * 0.8, ts * 0.12); ctx.stroke();
+      ctx.restore();
+      ctx.strokeStyle = sim.status === 'planning' ? 'rgba(47,230,230,0.55)' : 'rgba(138,151,178,0.3)';
+      ctx.lineWidth = Math.max(1.5, ts * 0.04); ctx.lineCap = 'round';
+      var cx = x + ts / 2, cy = y + ts / 2, q = ts * 0.1;
+      ctx.beginPath(); ctx.moveTo(cx - q, cy); ctx.lineTo(cx + q, cy); ctx.moveTo(cx, cy - q); ctx.lineTo(cx, cy + q); ctx.stroke();
+    });
+  };
+
   Renderer.prototype.drawSource = function (ctx, t, S, st, i, dt) {
     var ts = this.ts, c = this.tileCenter(t.i), s = ts * 0.84;
     this.srcPulse[i] = Math.max(0, this.srcPulse[i] - dt * 4);
@@ -548,9 +716,13 @@
     var hx = c.x - ox * 0.5, hy = c.y - oy * 0.5, hr = ts * 0.2;
     ctx.fillStyle = '#0a101c';
     ctx.beginPath(); ctx.arc(hx, hy, hr, 0, TAU); ctx.fill();
-    var remaining = S.seq.length - st.idx;
-    if (remaining > 0) {
-      drawItem(ctx, S.seq[st.idx], hx, hy, ts * 0.22, { noShadow: true, scale: 1 - this.srcPulse[i] * 0.6 });
+    var remaining = S.endless ? st.made - st.idx : S.seq.length - st.idx;
+    var nextCat = S.endless ? st.eseq[st.idx] : S.seq[st.idx];
+    if (S.endless && remaining <= 0) {
+      ctx.fillStyle = P.muted;
+      ctx.beginPath(); ctx.arc(hx, hy, hr * 0.22, 0, TAU); ctx.fill();
+    } else if (remaining > 0) {
+      drawItem(ctx, nextCat, hx, hy, ts * 0.22, { noShadow: true, scale: 1 - this.srcPulse[i] * 0.6 });
     } else {
       ctx.strokeStyle = P.muted; ctx.lineWidth = Math.max(1.5, ts * 0.04);
       ctx.beginPath(); ctx.moveTo(hx - hr * 0.45, hy); ctx.lineTo(hx - hr * 0.1, hy + hr * 0.35); ctx.lineTo(hx + hr * 0.5, hy - hr * 0.35); ctx.stroke();
@@ -611,11 +783,29 @@
     var sim = this.sim, need = 0;
     sim.F.sources.forEach(function (S) { S.seq.forEach(function (k) { if (k === t.cat) need++; }); });
     var sameCat = sim.F.bins.filter(function (b) { return b.cat === t.cat; }).length;
+    var painted = sim.F.tiles.some(function (q) { return q && q.type === 'paint'; }) || sim.endless;
     ctx.fillStyle = P.white;
     ctx.font = '600 ' + Math.max(9, Math.round(ts * 0.19)) + 'px "Barlow Condensed", sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-    var label = sameCat === 1 ? sim.binCount[i] + '/' + need : String(sim.binCount[i]);
+    var label = t.cap ? sim.binCount[i] + '/' + t.cap : (sameCat === 1 && !painted ? sim.binCount[i] + '/' + need : String(sim.binCount[i]));
     ctx.fillText(label, c.x, y0 + s - ts * 0.07);
+    // cheio: cadeado
+    if (t.cap && sim.binCount[i] >= t.cap) {
+      ctx.fillStyle = 'rgba(7,12,26,0.6)'; ctx.beginPath(); roundRect(ctx, x0, y0, s, s, ts * 0.2); ctx.fill();
+      ctx.fillStyle = P.white; var lx = c.x, ly = c.y - ts * 0.02;
+      ctx.fillRect(lx - ts * 0.11, ly - ts * 0.02, ts * 0.22, ts * 0.17);
+      ctx.strokeStyle = P.white; ctx.lineWidth = Math.max(1.5, ts * 0.04);
+      ctx.beginPath(); ctx.arc(lx, ly - ts * 0.04, ts * 0.075, Math.PI, 0); ctx.stroke();
+    }
+    // prensa: pistão desce e sobe durante a recarga
+    if (t.press) {
+      var busy = Math.max(0, sim.binBusy[i] - sim.tick) / t.press;
+      var py = y0 + ts * 0.06 + busy * ts * 0.22;
+      ctx.fillStyle = busy > 0 ? P.warn : '#56647f';
+      ctx.fillRect(c.x - s * 0.36, y0 - ts * 0.05, s * 0.72, ts * 0.07);
+      ctx.fillRect(c.x - ts * 0.03, y0 - ts * 0.05, ts * 0.06, py - y0 + ts * 0.05);
+      ctx.fillRect(c.x - s * 0.26, py, s * 0.52, ts * 0.06);
+    }
   };
 
   Renderer.prototype.drawFx = function (ctx, dt) {

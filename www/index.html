@@ -25,6 +25,10 @@
       <nav class="menu-actions">
         <button class="btn btn-primary" id="btn-play">Jogar</button>
         <button class="btn" id="btn-levels">Fases</button>
+        <div class="modes">
+          <button class="btn btn-mode" id="btn-daily"><b>Desafio do dia</b><small id="daily-sub"></small></button>
+          <button class="btn btn-mode" id="btn-endless"><b>Modo infinito</b><small id="endless-sub"></small></button>
+        </div>
         <button class="btn" id="btn-settings">Configurações</button>
       </nav>
       <p class="version" id="version"></p>
@@ -59,6 +63,7 @@
         <canvas id="board" aria-label="Fábrica. Toque nos desviadores para trocar a saída."></canvas>
         <div class="status-chip" id="status-chip"></div>
         <div class="coach hidden" id="coach" role="status"></div>
+        <div class="toast" id="toast" role="status" aria-live="polite"></div>
       </div>
       <footer class="controls">
         <button class="ctrl ctrl-side" id="btn-restart" aria-label="Reiniciar fase">
@@ -75,17 +80,22 @@
   <script src="js/vendor/capacitor.js"></script>
   <script src="js/vendor/capacitor-app.js"></script>
   <script src="js/vendor/capacitor-haptics.js"></script>
+  <script src="js/vendor/capacitor-clipboard.js"></script>
   <script src="js/config.js"></script>
   <script src="js/factory.js"></script>
   <script src="js/routing.js"></script>
   <script src="js/conveyor.js"></script>
   <script src="js/simulation.js"></script>
   <script src="js/levels.js"></script>
+  <script src="js/levels2.js"></script>
+  <script src="js/levels3.js"></script>
   <script src="js/storage.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/renderer.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/native.js"></script>
+  <script src="js/transfer.js"></script>
+  <script src="js/modes.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

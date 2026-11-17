@@ -22,6 +22,8 @@
       case 'circle': body = '<circle cx="12" cy="12" r="8.5"/>'; break;
       case 'square': body = '<rect x="4.5" y="4.5" width="15" height="15" rx="2.6"/>'; break;
       case 'triangle': body = '<path d="M12 3.2l9.2 16H2.8z" stroke-linejoin="round"/>'; break;
+      case 'star': body = '<path d="M12 2.5l2.7 6.3 6.8.6-5.2 4.5 1.6 6.7L12 17l-5.9 3.6 1.6-6.7-5.2-4.5 6.8-.6z" stroke-linejoin="round"/>'; break;
+      case 'hex': body = '<path d="M21 12l-4.5 7.8h-9L3 12l4.5-7.8h9z" stroke-linejoin="round"/>'; break;
       default: body = '<path d="M12 2.5l9.5 9.5-9.5 9.5L2.5 12z" stroke-linejoin="round"/>';
     }
     return '<svg class="shape" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" aria-label="' + c.name +
@@ -56,6 +58,12 @@
     if (t.done === 0) btn.textContent = 'Jogar';
     else if (next) btn.textContent = 'Continuar: fase ' + next;
     else btn.textContent = 'Rejogar fases';
+    if (FF.Modes) {
+      var d = FF.Modes.dailyStatus(), best = FF.Storage.extra().endlessBest || 0;
+      $('daily-sub').textContent = d.stars ? 'Feito hoje · ' + d.stars + ' de 3 estrelas' : d.level.subtitle;
+      $('btn-daily').classList.toggle('done', !!d.stars);
+      $('endless-sub').textContent = best ? 'Recorde: ' + best + ' entregas' : 'O ritmo só acelera';
+    }
   }
 
   function renderChapters() {
@@ -93,6 +101,12 @@
     var html = '';
     manifestState = [];
     sim.F.sources.forEach(function (S, i) {
+      if (S.endless) {
+        html += '<div class="mf-row" id="mf-' + i + '"><span class="mf-label">' + S.label + '</span><div class="mf-seq" id="mf-endless-' + i + '"></div>' +
+          '<span class="mf-left" id="mf-left-' + i + '"></span></div>';
+        manifestState.push(-1);
+        return;
+      }
       html += '<div class="mf-row" id="mf-' + i + '"><span class="mf-label">' + S.label + '</span><div class="mf-seq">';
       S.seq.forEach(function (c, k) { html += '<span class="mf-item" data-k="' + k + '">' + shapeSvg(c, 18) + '</span>'; });
       html += '</div><span class="mf-left" id="mf-left-' + i + '"></span></div>';
@@ -105,6 +119,18 @@
   function updateManifest(sim) {
     sim.F.sources.forEach(function (S, i) {
       var idx = sim.src[i].idx;
+      if (S.endless) {
+        var st = sim.src[i], key = idx * 1000 + st.made;
+        if (manifestState[i] === key) return;
+        manifestState[i] = key;
+        // no infinito só se conhece o que já está no depósito da fonte
+        var waiting = st.eseq.slice(idx, st.made), h = '';
+        waiting.forEach(function (c, k) { h += '<span class="mf-item' + (k === 0 ? ' next' : '') + '">' + shapeSvg(c, 18) + '</span>'; });
+        $('mf-endless-' + i).innerHTML = h || '<span class="mf-wait">produzindo…</span>';
+        var per = Math.round(60 * FF.CONFIG.TICK_RATE / Math.max(S.endless.min, S.endless.start - st.made * S.endless.step));
+        $('mf-left-' + i).textContent = per + ' por minuto';
+        return;
+      }
       if (manifestState[i] === idx) return;
       manifestState[i] = idx;
       var items = $('mf-' + i).querySelectorAll('.mf-item');
@@ -122,12 +148,17 @@
   }
 
   function setHud(sim) {
-    $('hud-code').textContent = sim.level.id;
+    $('hud-code').textContent = sim.level.mode === 'daily' ? sim.level.baseId : sim.level.id;
     $('hud-name').textContent = sim.level.name;
     updateCount(sim);
   }
 
   function updateCount(sim) {
+    if (sim.endless) {
+      var best = FF.Storage.extra().endlessBest || 0;
+      $('hud-count').innerHTML = '<b>' + sim.delivered + '</b><span>' + (best ? 'recorde ' + best : 'entregues') + '</span>';
+      return;
+    }
     $('hud-count').innerHTML = '<b>' + sim.delivered + '</b>/' + sim.total + '<span>entregues</span>';
   }
 
@@ -145,14 +176,25 @@
     b.classList.toggle('is-running', status === 'running');
   }
 
-  function setStatusChip(status, hasDevices) {
+  function setStatusChip(status, hasDevices, custom) {
     var el = $('status-chip');
-    var txt = {
+    var txt = custom || {
       planning: hasDevices ? 'Planejamento: ajuste os desviadores' : 'Planejamento: produção parada',
       paused: hasDevices ? 'Pausado: você ainda pode trocar os desviadores' : 'Pausado'
     }[status] || '';
     el.textContent = txt;
     el.classList.toggle('show', !!txt);
+  }
+
+  /* ---------- Aviso curto ---------- */
+  var toastTimer = null;
+  function toast(msg) {
+    var el = $('toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2200);
   }
 
   /* ---------- Tutorial (balão curto) ---------- */
@@ -196,9 +238,33 @@
       row('music', 'Música', 'Trilha ambiente da fábrica') +
       row('sfx', 'Efeitos sonoros', 'Desviadores, entregas e alertas') +
       row('vibration', 'Vibração', vib ? 'Resposta tátil ao tocar e em alertas' : 'Não disponível neste aparelho', !vib) +
+      '<div class="xfer"><b>Salvar progresso</b><small>Um código curto guarda suas fases e estrelas. Funciona sem internet e sem conta.</small></div>' +
+      '<button class="btn" data-act="code-copy">Copiar meu código de progresso</button>' +
+      '<button class="btn" data-act="code-paste">Colar código</button>' +
       '<button class="btn btn-ghost danger" id="btn-reset">Apagar progresso</button>' +
       '<button class="btn btn-primary" data-act="settings-close">Pronto</button>' +
       '<p class="fine">FLOW FACTORY v' + FF.CONFIG.VERSION + '</p>';
+  }
+
+  function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  function codeCopyHtml(code) {
+    return '<h2>Seu código</h2>' +
+      '<p class="lead">Guarde este código, por exemplo mandando para você mesmo no WhatsApp. Depois de reinstalar, ou em outro celular, use <b>Colar código</b>.</p>' +
+      '<output class="code-box" id="code-box" tabindex="0">' + esc(code) + '</output>' +
+      '<p class="code-msg" id="code-msg" role="status" aria-live="polite"></p>' +
+      '<button class="btn btn-primary" data-act="code-copy-again">Copiar de novo</button>' +
+      '<button class="btn" data-act="code-back">Voltar</button>';
+  }
+
+  function codePasteHtml() {
+    return '<h2>Colar código</h2>' +
+      '<p class="lead">Cole o código que você guardou. O progresso dele se junta ao deste aparelho: fica sempre o melhor resultado de cada fase.</p>' +
+      '<textarea class="code-input" id="code-input" rows="3" spellcheck="false" autocapitalize="characters" autocomplete="off" placeholder="FF-XXXX-XXXX-..." aria-label="Código de progresso"></textarea>' +
+      '<p class="code-msg" id="code-msg" role="status" aria-live="polite"></p>' +
+      '<button class="btn" data-act="code-from-clipboard">Colar da área de transferência</button>' +
+      '<button class="btn btn-primary" data-act="code-restore">Recuperar progresso</button>' +
+      '<button class="btn btn-ghost" data-act="code-back">Voltar</button>';
   }
 
   FF.UI = {
@@ -206,8 +272,8 @@
     show: show, current: function () { return current; },
     renderMenu: renderMenu, renderChapters: renderChapters,
     buildManifest: buildManifest, updateManifest: updateManifest, setHud: setHud, updateCount: updateCount,
-    setMainButton: setMainButton, setStatusChip: setStatusChip, coach: coach,
+    setMainButton: setMainButton, setStatusChip: setStatusChip, coach: coach, toast: toast,
     openModal: openModal, closeModal: closeModal, modalOpen: modalOpen, modalOpts: modalOpts,
-    settingsHtml: settingsHtml
+    settingsHtml: settingsHtml, codeCopyHtml: codeCopyHtml, codePasteHtml: codePasteHtml
   };
 })(globalThis.FF = globalThis.FF || {});

@@ -75,6 +75,8 @@ with sync_playwright() as p:
     for rep in VAL:
         lid, ref = rep['id'], rep['info']['reference']
         pg.evaluate(f"FF.Game.openLevel('{lid}')"); pg.wait_for_timeout(250)
+        if ref.get('placements'):
+            pg.evaluate(f"FF.Game.placements = {json.dumps(ref['placements'])}; FF.Game.reset();"); pg.wait_for_timeout(100)
         pg.screenshot(path=f'{OUT}/20-{lid}-planning.png')
         status = pg.evaluate(f"""(() => {{
             const sim = FF.Game.sim, ref = {json.dumps(ref)};
@@ -141,6 +143,85 @@ with sync_playwright() as p:
     check('Voltar nas fases vai ao início', pg.is_visible('#scr-menu'))
     exited = pg.evaluate('(() => { let ex = false; FF.Game.back(() => { ex = true; }); return ex; })()')
     check('Voltar no início sai do app', exited)
+
+    print('Montagem: toque real numa vaga')
+    pg.evaluate("FF.Game.openLevel('15-1')"); pg.wait_for_timeout(250)
+    pos = pg.evaluate("""(() => { const G = FF.Game, t = G.sim.F.slots[0], c = G.R.tileCenter(t);
+        const r = G.R.cv.getBoundingClientRect(); return [r.left + c.x, r.top + c.y]; })()""")
+    pg.touchscreen.tap(pos[0], pos[1]); pg.wait_for_timeout(200)
+    check('Toque na vaga coloca uma peça', len(pg.evaluate('FF.Game.sim.placements')) == 1)
+    pg.screenshot(path=f'{OUT}/32-build-slot.png')
+
+    print('Reversível: recusa com carga')
+    pg.evaluate("FF.Game.openLevel('13-1')"); pg.wait_for_timeout(250)
+    pg.click('#btn-main')
+    pg.wait_for_function('FF.Sim.revLoad(FF.Game.sim, 0) > 0', timeout=15000)
+    d0 = pg.evaluate('FF.Game.sim.dev[0]')
+    tap_device(pg, 0); pg.wait_for_timeout(100)
+    check('Reversível carregada recusa o toque', pg.evaluate('FF.Game.sim.dev[0]') == d0)
+    pg.screenshot(path=f'{OUT}/33-rev-refused.png')
+
+    print('Desafio do dia')
+    pg.evaluate("FF.UI.closeModal(); FF.UI.show('menu')"); pg.wait_for_timeout(200)
+    pg.screenshot(path=f'{OUT}/60-menu-modes.png')
+    pg.click('#btn-daily'); pg.wait_for_timeout(300)
+    base = pg.evaluate('FF.Game.level.baseId')
+    check('Desafio do dia abre uma fase da campanha', pg.inner_text('#hud-code') == base and pg.evaluate('FF.Game.mode') == 'daily')
+    dref = [r for r in VAL if r['id'] == base][0]['info']['reference']
+    if dref.get('placements'):
+        pg.evaluate(f"FF.Game.placements = {json.dumps(dref['placements'])}; FF.Game.reset();")
+    pg.evaluate(f"""(() => {{
+        const sim = FF.Game.sim, ref = {json.dumps(dref)};
+        ref.init.forEach((st, d) => {{ while (sim.dev[d] !== st) FF.Sim.toggle(sim, d); }});
+        FF.Sim.start(sim);
+        const by = {{}}; ref.schedule.forEach(s => (by[s.tick] = by[s.tick] || []).push(s.dev));
+        while (sim.status === 'running') {{ (by[sim.tick + 1] || []).forEach(d => FF.Sim.toggle(sim, d)); FF.Sim.step(sim); }}
+    }})()""")
+    pg.wait_for_selector('.sheet.win', timeout=5000); pg.wait_for_timeout(1200)
+    pg.screenshot(path=f'{OUT}/61-daily-win.png')
+    check('Vitória do desafio registrada', 'Desafio do dia' in pg.inner_text('.sheet') and pg.evaluate('FF.Storage.extra().dailyCount') == 1)
+    pg.click('[data-act="menu"]'); pg.wait_for_timeout(200)
+    check('Menu marca o desafio de hoje como feito', 'Feito hoje' in pg.inner_text('#daily-sub'))
+
+    print('Modo infinito')
+    pg.click('#btn-endless'); pg.wait_for_timeout(300)
+    check('Modo infinito abre', pg.evaluate('FF.Game.sim.endless') is True)
+    pg.evaluate("""(() => { const sim = FF.Game.sim, F = sim.F;
+        sim.decide = (s, X, N) => { const t = F.tiles[F.devices[N.dev].tile], c = X.cat;
+          const st = t.x === 3 ? ((c === 'R' || c === 'B') ? 0 : 1) : t.x === 1 ? (c === 'R' ? 0 : 1) : (c === 'Y' ? 0 : 1);
+          s.dev[N.dev] = st; return st; }; })()""")
+    pg.click('#btn-main'); pg.wait_for_timeout(16000)
+    pg.screenshot(path=f'{OUT}/62-endless-running.png')
+    score = pg.evaluate('FF.Game.sim.delivered')
+    check('Infinito entrega e conta pontos', score >= 3, score)
+    pg.evaluate("FF.Game.sim.decide = null; FF.Game.speed = 2")
+    pg.wait_for_selector('.sheet.fail, .sheet.win', timeout=60000); pg.wait_for_timeout(300)
+    pg.screenshot(path=f'{OUT}/63-endless-end.png')
+    check('Fim do infinito salva o recorde', pg.evaluate('FF.Storage.extra().endlessBest') >= score and 'Modo infinito' in pg.inner_text('.sheet'))
+    pg.click('[data-act="menu"]'); pg.wait_for_timeout(200)
+
+    print('Código de transferência')
+    pg.click('#btn-settings'); pg.wait_for_timeout(200)
+    pg.screenshot(path=f'{OUT}/70-settings-transfer.png')
+    pg.click('[data-act="code-copy"]'); pg.wait_for_timeout(400)
+    code = pg.inner_text('#code-box').strip()
+    pg.screenshot(path=f'{OUT}/71-code.png')
+    check('Código gerado no formato FF-XXXX', code.startswith('FF-') and len(code) > 20, code)
+    check('Mensagem de cópia exibida', len(pg.inner_text('#code-msg')) > 5)
+    before = pg.evaluate('[FF.Storage.totals().done, FF.Storage.totals().stars, FF.Storage.extra().endlessBest]')
+    pg.evaluate("localStorage.clear()"); pg.reload(); pg.wait_for_timeout(500)
+    check('Reinstalação simulada zera o progresso', pg.evaluate('FF.Storage.totals().done') == 0)
+    pg.click('#btn-settings'); pg.wait_for_timeout(200)
+    pg.click('[data-act="code-paste"]'); pg.wait_for_timeout(200)
+    pg.fill('#code-input', 'FF-ABCD-1234'); pg.click('[data-act="code-restore"]'); pg.wait_for_timeout(200)
+    check('Código inválido mostra erro', 'código' in pg.inner_text('#code-msg').lower() or 'Código' in pg.inner_text('#code-msg'))
+    pg.fill('#code-input', code.lower().replace('-', ' ')); pg.click('[data-act="code-restore"]'); pg.wait_for_timeout(300)
+    pg.screenshot(path=f'{OUT}/72-restored.png')
+    after = pg.evaluate('[FF.Storage.totals().done, FF.Storage.totals().stars, FF.Storage.extra().endlessBest]')
+    check('Colar o código recupera fases, estrelas e recorde', after == before, (before, after))
+    pg.evaluate('FF.Game.back()'); pg.wait_for_timeout(150)
+    check('Voltar no código volta às configurações', pg.is_visible('.sheet.settings') and 'Configurações' in pg.inner_text('.sheet'))
+    pg.evaluate('FF.Game.back()'); pg.wait_for_timeout(150)
 
     print('Persistência')
     pg.reload(); pg.wait_for_timeout(500)

@@ -1,10 +1,10 @@
 /* FLOW FACTORY — service worker: cache completo para jogar offline no navegador. */
-const CACHE = 'flowfactory-v1.0.0';
+const CACHE = 'flowfactory-v1.1.0';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/config.js', './js/factory.js', './js/routing.js', './js/conveyor.js', './js/simulation.js',
-  './js/levels.js', './js/storage.js', './js/audio.js', './js/renderer.js', './js/ui.js', './js/native.js', './js/main.js',
-  './js/vendor/capacitor.js', './js/vendor/capacitor-app.js', './js/vendor/capacitor-haptics.js',
+  './js/levels.js', './js/levels2.js', './js/levels3.js', './js/storage.js', './js/audio.js', './js/renderer.js', './js/ui.js', './js/native.js', './js/transfer.js', './js/modes.js', './js/main.js',
+  './js/vendor/capacitor.js', './js/vendor/capacitor-app.js', './js/vendor/capacitor-haptics.js', './js/vendor/capacitor-clipboard.js',
   './fonts/barlow-condensed-latin-600-normal.woff2', './fonts/barlow-condensed-latin-800-normal.woff2',
   './fonts/barlow-latin-500-normal.woff2', './fonts/barlow-latin-600-normal.woff2',
   './icons/icon-192.png', './icons/icon-512.png'

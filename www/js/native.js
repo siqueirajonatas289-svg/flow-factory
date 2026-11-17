@@ -44,6 +44,36 @@
     try { if (G.navigator && G.navigator.vibrate) G.navigator.vibrate(pattern); } catch (e) { /* sem suporte */ }
   }
 
+  function clipboardPlugin() {
+    if (G.capacitorClipboard && G.capacitorClipboard.Clipboard) return G.capacitorClipboard.Clipboard;
+    if (G.Capacitor && G.Capacitor.Plugins && G.Capacitor.Plugins.Clipboard) return G.Capacitor.Plugins.Clipboard;
+    return null;
+  }
+
+  // Copiar texto: no app usa o Clipboard nativo; no navegador, a API web; por último, execCommand.
+  function copyText(text) {
+    var CB = isNative() ? clipboardPlugin() : null;
+    if (CB) return CB.write({ string: text }).then(function () { return true; }, function () { return legacyCopy(text); });
+    if (G.navigator && navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return legacyCopy(text); });
+    }
+    return Promise.resolve(legacyCopy(text));
+  }
+  function legacyCopy(text) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+      var ok = document.execCommand('copy'); document.body.removeChild(ta); return ok;
+    } catch (e) { return false; }
+  }
+  function readText() {
+    var CB = isNative() ? clipboardPlugin() : null;
+    if (CB) return CB.read().then(function (r) { return r && r.value ? String(r.value) : ''; });
+    if (G.navigator && navigator.clipboard && navigator.clipboard.readText) return navigator.clipboard.readText();
+    return Promise.reject(new Error('sem acesso'));
+  }
+
   function init(handlers) {
     var native = isNative();
     document.documentElement.classList.toggle('native', native);
@@ -57,5 +87,5 @@
     });
   }
 
-  FF.Native = { init: init, isNative: isNative, vibrate: vibrate, vibrationSupported: vibrationSupported };
+  FF.Native = { init: init, isNative: isNative, vibrate: vibrate, vibrationSupported: vibrationSupported, copyText: copyText, readText: readText };
 })(globalThis.FF = globalThis.FF || {});

@@ -8,7 +8,7 @@
   'use strict';
 
   FF.CONFIG = Object.freeze({
-    VERSION: '1.0.0',
+    VERSION: '1.1.0',
     TICK_RATE: 60,          // ticks de simulação por segundo
     HALF: 50,               // comprimento de meio bloco (entrada ou saída)
     GAP: 50,                // distância mínima entre objetos na mesma faixa
@@ -17,6 +17,8 @@
     GATE_STOP: 24,          // linha de parada do bloqueador (antes do centro do bloco)
     GATE_TICKS: 120,        // bloqueador fecha por 2 s e reabre sozinho
     SLOW_SPEED: 1,          // esteira lenta (metade da vazão)
+    FAST_SPEED: 4,          // esteira expressa (dobro da velocidade)
+    BIN_STOP: 24,           // recipiente fechado (cheio ou prensando): fila para aqui
     BASE_SPEED: 2,          // unidades por tick (= 1,2 bloco por segundo)
     DEFAULT_INTERVAL: 96,   // ticks entre emissões de uma fonte
     FIRST_DELAY: 30,        // ticks até a primeira emissão
@@ -44,8 +46,12 @@
     R: { key: 'R', name: 'Vermelho', color: '#ff4f62', dark: '#9e1f33', light: '#ff9aa6', shape: 'circle', pitch: 0 },
     B: { key: 'B', name: 'Azul', color: '#3d8bff', dark: '#173f99', light: '#9cc4ff', shape: 'square', pitch: 3 },
     Y: { key: 'Y', name: 'Amarelo', color: '#ffc733', dark: '#9c7100', light: '#ffe59a', shape: 'triangle', pitch: 5 },
-    G: { key: 'G', name: 'Verde', color: '#2fd47c', dark: '#11703c', light: '#98f0c0', shape: 'diamond', pitch: 7 }
+    G: { key: 'G', name: 'Verde', color: '#2fd47c', dark: '#11703c', light: '#98f0c0', shape: 'diamond', pitch: 7 },
+    W: { key: 'W', name: 'Curinga', color: '#ffe27a', dark: '#a8741a', light: '#fff6cf', shape: 'star', pitch: 12 },
+    X: { key: 'X', name: 'Defeituoso', color: '#8b93a6', dark: '#3d4352', light: '#c6ccd8', shape: 'hex', pitch: -5 }
   };
+  // Curinga entra em qualquer recipiente; defeituoso só no descarte (recipiente X).
+  FF.binAccepts = function (binCat, cat) { return cat === binCat || (cat === 'W' && binCat !== 'X'); };
 
   FF.PALETTE = {
     bg: '#070c1a',

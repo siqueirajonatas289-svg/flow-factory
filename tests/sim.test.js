@@ -17,11 +17,17 @@ const bin = cat => ({ type: 'bin', cat });
 
 function runAll(sim, onTick) { while (sim.status === 'running') { FF.Sim.step(sim); if (onTick) onTick(sim); } return sim; }
 function hashState(sim) { return sim.tick + '|' + sim.items.map(i => [i.id, i.tile, i.half, i.ins, i.outs, i.p].join(',')).join(';'); }
+function onBridge(F, a, b) {
+  if (a.tile !== b.tile || F.tiles[a.tile].type !== 'bridge') return false;
+  const ax = it => ((it.half === 0 ? it.ins : it.outs) & 1);
+  return ax(a) !== ax(b);
+}
 function minDist(sim) {
   let m = Infinity; const p = {}, q = {};
   for (let i = 0; i < sim.items.length; i++) {
     FF.Geo.itemPos(sim.F, sim.items[i], p);
     for (let j = i + 1; j < sim.items.length; j++) {
+      if (onBridge(sim.F, sim.items[i], sim.items[j])) continue;
       FF.Geo.itemPos(sim.F, sim.items[j], q);
       m = Math.min(m, Math.hypot(p.x - q.x, p.y - q.y));
     }
@@ -228,6 +234,104 @@ test('validador: solução com bloqueador e com distribuidor é reproduzida', ()
   assert(sim.status === 'won', 'replay ' + sim.status);
   const noGate = solve(L, { maxHolds: 0 });
   assert(!noGate.bestClean, 'sem o bloqueador não há solução limpa');
+});
+
+console.log('Mecânicas novas');
+const play = (L, pl) => { const sim = FF.Sim.create(L, pl); FF.Sim.start(sim); let md = Infinity; runAll(sim, s => { md = Math.min(md, minDist(s)); }); sim.md = md; return sim; };
+
+test('pintor troca a cor no centro (defeituoso não pinta)', () => {
+  const L = { id: 't', map: ['A', 'p', 'v', '1'], legend: { A: src('RRY'), p: { type: 'paint', out: 'S', color: 'B' }, 1: bin('B') } };
+  const sim = play(L); assert(sim.status === 'won' && sim.binCount[0] === 3, sim.status);
+  const L2 = { id: 't', map: ['A', 'p', 'v', '1'], legend: { A: src('X'), p: { type: 'paint', out: 'S', color: 'B' }, 1: bin('B') } };
+  const s2 = play(L2); assert(s2.status === 'failed' && s2.fail.cat === 'X', 'defeituoso continua X');
+});
+
+test('filtro: a cor escolhida sai pela 1ª saída, o resto pela 2ª; toque troca a cor', () => {
+  const L = { id: 't', map: ['.A.', '.v.', 'vfv', '1.2'],
+    legend: { A: src('RBRYB', { interval: 70 }), f: { type: 'filter', outs: ['W', 'E'], colors: 'RY' }, 1: bin('R'), 2: bin('B') } };
+  const sim = FF.Sim.create(L); FF.Sim.start(sim);
+  const fT = sim.F.devices[0].tile; let tapped = false;
+  runAll(sim, s => { if (!tapped && s.items.some(i => i.cat === 'Y' && i.tile !== fT && s.F.tiles[i.tile].y === 1)) { FF.Sim.toggle(s, 0); tapped = true; } });
+  // Y precisa ir para... não existe recipiente Y: deve falhar no recipiente errado ou ir pelo lado B
+  assert(sim.status === 'failed', 'Y no recipiente B falha');
+  const L2 = JSON.parse(JSON.stringify(L)); L2.legend.A.seq = 'RBRBB';
+  const ok = play(L2); assert(ok.status === 'won', 'filtro separa sozinho ' + ok.status);
+});
+
+test('esteira expressa chega antes e não sobrepõe', () => {
+  const mk = t => ({ id: 't', map: ['A', t, t, t, t, '1'], legend: { A: src('RRRRRR', { interval: 26 }), f: { type: 'fast', out: 'S' }, 1: bin('R') } });
+  const fast = play(mk('f')), norm = play(mk('v'));
+  assert(fast.status === 'won' && norm.status === 'won');
+  assert(fast.tick < norm.tick, `expressa ${fast.tick} < normal ${norm.tick}`);
+  assert(fast.md >= C.ITEM_SIZE - 1e-9, 'dist ' + fast.md);
+});
+
+test('ponte: os dois eixos passam sem esperar um pelo outro', () => {
+  const mk = c => ({ id: 't', map: ['..A..', '..v..', 'B>' + c + '>1', '..v..', '..2..'],
+    legend: { A: src('BBBBBBBB', { interval: 26 }), B: { type: 'source', out: 'E', seq: 'RRRRRRRR', interval: 26 }, k: { type: 'bridge' }, 1: bin('R'), 2: bin('B') } });
+  const br = play(mk('k')), cr = play(mk('+'));
+  assert(br.status === 'won', 'ponte vence ' + br.status);
+  assert(br.tick < cr.tick || cr.status === 'failed', `ponte ${br.tick} vs cruzamento ${cr.tick} ${cr.status}`);
+  assert(br.md >= C.ITEM_SIZE - 1e-9, 'dist ' + br.md);
+});
+
+test('recipiente com capacidade fecha quando enche e a fila espera', () => {
+  const L = { id: 't', map: ['A', 'v', 'v', '1'], legend: { A: src('RRRR', { interval: 40 }), 1: { type: 'bin', cat: 'R', cap: 2 } } };
+  const sim = play(L);
+  assert(sim.binCount[0] === 2, 'só 2 entraram: ' + sim.binCount[0]);
+  assert(sim.status === 'failed' && sim.fail.reason === 'gridlock', sim.status + ' ' + JSON.stringify(sim.fail));
+  assert(sim.md >= C.ITEM_SIZE - 1e-9);
+});
+
+test('prensa: entregas espaçadas pelo tempo de recarga', () => {
+  const L = { id: 't', map: ['A', 'v', 'v', '1'], legend: { A: src('RRRR', { interval: 26 }), 1: { type: 'bin', cat: 'R', press: 80 } } };
+  const sim = FF.Sim.create(L); FF.Sim.start(sim); const ticks = [];
+  runAll(sim, s => { s.events.forEach(e => { if (e.type === 'deliver') ticks.push(s.tick); }); s.events.length = 0; });
+  assert(sim.status === 'won', sim.status);
+  for (let i = 1; i < ticks.length; i++) assert(ticks[i] - ticks[i - 1] >= 80, 'espaço ' + (ticks[i] - ticks[i - 1]));
+});
+
+test('curinga entra em qualquer recipiente; defeituoso só no descarte', () => {
+  const L = { id: 't', map: ['.A.', '.v.', 'vdv', '1.2'], legend: { A: src('WXW', { interval: 90 }), d: { type: 'diverter', outs: ['W', 'E'] }, 1: bin('R'), 2: bin('X') } };
+  const sim = FF.Sim.create(L); FF.Sim.start(sim);
+  // W -> esquerda (R), X -> direita, W -> esquerda
+  const want = { W: 0, X: 1 }; const dT = sim.F.devices[0].tile;
+  runAll(sim, s => { const nx = s.items.find(i => i.half === 1 && s.F.tiles[i.tile].y === 1); if (nx && s.dev[0] !== want[nx.cat]) FF.Sim.toggle(s, 0); });
+  assert(sim.status === 'won', sim.status + JSON.stringify(sim.fail));
+  const L2 = JSON.parse(JSON.stringify(L)); L2.legend.A.seq = 'X';
+  assert(play(L2).status === 'failed', 'defeituoso no recipiente comum falha');
+});
+
+test('reversível: inverte só vazia; leva objetos nos dois sentidos', () => {
+  const L = { id: 't', map: ['.A...B.', '.v...v.', '.v...v.', 'vrrrrrv', 'v.....v', '1.....2'],
+    legend: { A: src('BB', { interval: 60 }), B: src('RR', { interval: 60, delay: 700 }),
+      r: { type: 'rev', axis: 'H' }, 1: bin('R'), 2: bin('B') } };
+  const F = FF.buildFactory(L);
+  assert(F.devices.filter(d => d.type === 'rev').length === 1, 'grupo único');
+  const sim = FF.Sim.create(L); const rv = F.devices.findIndex(d => d.type === 'rev');
+  FF.Sim.start(sim);
+  let refused = false, flipped = false;
+  runAll(sim, s => {
+    if (!flipped && s.binCount[1] === 2 && FF.Sim.revLoad(s, rv) === 0) { flipped = FF.Sim.toggle(s, rv); }
+    if (!refused && FF.Sim.revLoad(s, rv) > 0) { refused = !FF.Sim.toggle(s, rv); }
+  });
+  assert(refused, 'toque recusado com carga');
+  assert(sim.status === 'won', sim.status + ' ' + JSON.stringify(sim.fail));
+});
+
+test('montagem: validador encontra onde colocar as esteiras', () => {
+  const { validateLevel } = require('../tools/validate');
+  const L = { id: 'tb', par: 0, build: { pieces: 2 }, map: ['A..', 'v..', '##.', '.1.'], legend: { A: src('RR'), 1: bin('R') } };
+  const r = validateLevel(L);
+  assert(r.ok, r.errors.join('; '));
+  assert(Object.keys(r.info.reference.placements).length === 2, JSON.stringify(r.info.reference.placements));
+});
+
+test('modo infinito: nunca vence e acelera', () => {
+  const L = { id: 'inf', map: ['A', 'v', '1'], legend: { A: { type: 'source', out: 'S', endless: { cats: 'R', start: 90, min: 30, step: 3 } }, 1: bin('R') } };
+  const sim = FF.Sim.create(L); FF.Sim.start(sim);
+  for (let i = 0; i < 3000; i++) FF.Sim.step(sim);
+  assert(sim.status === 'running' && sim.delivered > 40, 'entregues ' + sim.delivered);
 });
 
 test('fuzz: toques aleatórios em todas as fases nunca quebram nem sobrepõem', () => {
