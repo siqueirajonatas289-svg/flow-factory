@@ -1,0 +1,34 @@
+# Gera o APK de teste (debug) na nuvem do GitHub — não precisa de Android Studio.
+# Uso: Actions → "Android — APK de teste" → Run workflow. O APK fica em "Artifacts".
+name: Android — APK de teste
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  apk-debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      # o runner ubuntu-latest já traz o Android SDK (ANDROID_HOME); o AGP baixa a plataforma 36 se faltar
+      - name: Conferir Android SDK
+        run: echo "ANDROID_HOME=$ANDROID_HOME" && test -d "$ANDROID_HOME"
+      - run: npm ci
+      - run: npm run sync
+      - name: Compilar APK debug
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flow-factory-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk

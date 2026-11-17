@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Nome da versão de teste (debug), para não confundir com a versão da loja. -->
+    <string name="app_name">FLOW FACTORY (teste)</string>
+    <string name="title_activity_main">FLOW FACTORY (teste)</string>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">FLOW FACTORY</string>
+    <string name="title_activity_main">FLOW FACTORY</string>
+    <string name="package_name">com.gridmind.flowfactory</string>
+    <string name="custom_url_scheme">com.gridmind.flowfactory</string>
+</resources>

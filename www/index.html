@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#070c1a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="description" content="FLOW FACTORY: puzzle de esteiras. Controle desviadores e mantenha a fábrica fluindo.">
+  <title>FLOW FACTORY</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- MENU PRINCIPAL -->
+    <section id="scr-menu" class="screen active" aria-label="Menu principal">
+      <div class="menu-hero">
+        <h1 class="logo" aria-label="Flow Factory"><span>FLOW</span><span>FACTORY</span></h1>
+        <canvas id="logo-belt" aria-hidden="true"></canvas>
+        <p class="tagline">Desvie, cruze e entregue. Mantenha a fábrica fluindo.</p>
+      </div>
+      <div class="menu-progress" id="menu-progress"></div>
+      <nav class="menu-actions">
+        <button class="btn btn-primary" id="btn-play">Jogar</button>
+        <button class="btn" id="btn-levels">Fases</button>
+        <button class="btn" id="btn-settings">Configurações</button>
+      </nav>
+      <p class="version" id="version"></p>
+    </section>
+
+    <!-- SELEÇÃO DE FASES -->
+    <section id="scr-chapters" class="screen" aria-label="Seleção de fases">
+      <header class="bar">
+        <button class="icon-btn" data-nav="menu" aria-label="Voltar ao menu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <h2>Fases</h2>
+        <span class="bar-stars" id="chap-stars"></span>
+      </header>
+      <div class="chapters" id="chapters"></div>
+    </section>
+
+    <!-- JOGO -->
+    <section id="scr-game" class="screen" aria-label="Fase">
+      <header class="hud">
+        <button class="icon-btn" id="btn-hud-back" aria-label="Voltar às fases">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="hud-title"><span id="hud-code"></span><strong id="hud-name"></strong></div>
+        <div class="hud-count" id="hud-count" aria-live="polite"></div>
+        <button class="icon-btn" id="btn-pause" aria-label="Pausar e abrir menu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1.2" fill="currentColor"/></svg>
+        </button>
+      </header>
+      <div class="manifest" id="manifest" aria-label="Ordem de produção"></div>
+      <div class="board-wrap" id="board-wrap">
+        <canvas id="board" aria-label="Fábrica. Toque nos desviadores para trocar a saída."></canvas>
+        <div class="status-chip" id="status-chip"></div>
+        <div class="coach hidden" id="coach" role="status"></div>
+      </div>
+      <footer class="controls">
+        <button class="ctrl ctrl-side" id="btn-restart" aria-label="Reiniciar fase">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 1 0 2.1-5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M6 3v4.5h4.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="ctrl ctrl-main" id="btn-main"></button>
+        <button class="ctrl ctrl-side" id="btn-speed">1×</button>
+      </footer>
+    </section>
+
+    <div class="modal hidden" id="modal" role="dialog" aria-modal="true"><div class="sheet" id="sheet"></div></div>
+  </div>
+
+  <script src="js/vendor/capacitor.js"></script>
+  <script src="js/vendor/capacitor-app.js"></script>
+  <script src="js/vendor/capacitor-haptics.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/factory.js"></script>
+  <script src="js/routing.js"></script>
+  <script src="js/conveyor.js"></script>
+  <script src="js/simulation.js"></script>
+  <script src="js/levels.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/renderer.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/native.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

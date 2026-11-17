@@ -1,0 +1,34 @@
+{
+  "name": "flow-factory",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FLOW FACTORY — puzzle de esteiras e roteamento (HTML5 + Canvas + JS puro), empacotado para Android com Capacitor.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "vendor": "node tools/vendor.js",
+    "test": "node tests/sim.test.js && node tools/validate.js",
+    "levels:check": "node tools/validate.js",
+    "serve": "python3 -m http.server 8765 --bind 127.0.0.1 -d www",
+    "test:e2e": "node tools/validate.js --json > /tmp/val.json && python3 tests/e2e_full.py http://localhost:8765/index.html /tmp/val.json",
+    "build:single": "node tools/build-single.js",
+    "assets": "node tools/android-assets.js",
+    "sync": "npm run vendor && npm run levels:check && cap sync android",
+    "open": "cap open android",
+    "android:debug": "npm run sync && cd android && ./gradlew assembleDebug",
+    "android:bundle": "npm run sync && cd android && ./gradlew bundleRelease",
+    "android:apk-release": "npm run sync && cd android && ./gradlew assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/haptics": "^8.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.2",
+    "sharp": "^0.34.5",
+    "typescript": "^5.9.0"
+  }
+}

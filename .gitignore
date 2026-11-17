@@ -1,0 +1,12 @@
+node_modules/
+dist/
+# artefatos de build Android
+android/app/build/
+android/build/
+android/.gradle/
+*.apk
+*.aab
+# segredos de assinatura
+android/keystore.properties
+*.jks
+*.keystore

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- paleta do FLOW FACTORY -->
+    <color name="ff_background">#070C1A</color>
+    <color name="colorPrimary">#070C1A</color>
+    <color name="colorPrimaryDark">#070C1A</color>
+    <color name="colorAccent">#2FE6E6</color>
+</resources>
